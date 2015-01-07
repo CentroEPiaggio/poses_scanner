@@ -1,0 +1,6 @@
+<launch>
+	
+	<!-- the scene acquirer node  -->
+	<node name="scene_acquirer_node" pkg="scene_acquirer_node" type="scene_acquirer_node" output="screen" />
+
+</launch>
