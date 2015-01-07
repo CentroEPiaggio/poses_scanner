@@ -340,9 +340,13 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
    * [5] y coordinate of normal direction
    * [6] z coordinate of normal direction
    */
+  
+  /* keep centre as clicked point and not centre found with ransac
   centre[0]=coefficients[0];
   centre[1]=coefficients[1];
   centre[2]=coefficients[2];
+  */
+
   Eigen::Affine3f trasl, RaA;
   trasl = Eigen::Translation3f(-centre);
   // Second Transformation, transalte into table center
@@ -504,7 +508,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     longi.clear();
     id=0;
     //for cycle in latitude TODO
-    int lat = 30; //tmp lat workaround  TODO remove
+    int lat = req.lat_pass; //tmp lat workaround (set fixed latitute from service instead of pass)  TODO remove
     for (int lon=0; lon<360; lon+=lon_pass)
     {//for cycle in longitude
       //transform into table refernce system
