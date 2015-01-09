@@ -220,12 +220,13 @@ bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquire
   std::string acquire_scene_srv_name = nh_.resolveName("/scene_acquirer_node/acquire_scene");
   scene_acquirer_node::acquire_scene acquire_srv;
   acquire_srv.request.save = "false";
-  boost::this_thread::sleep (boost::posix_time::microseconds (200000));
+  boost::this_thread::sleep (boost::posix_time::microseconds (500000));
   if ( !ros::service::call<scene_acquirer_node::acquire_scene>(acquire_scene_srv_name, acquire_srv))
   {
     ROS_ERROR("[posesScanner] Acquire scene service failed!");
     return false;
   }
+  boost::this_thread::sleep (boost::posix_time::microseconds (500000));
   sensor_msgs::PointCloud2 acq ;
   acq = acquire_srv.response.cloud;
   pcl::fromROSMsg (acq, *acquired);
@@ -539,7 +540,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       pt.filter (*cloud_);
       //rotate back
       Eigen::Affine3f lon_tran; 
-      lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
+      lon_tran = Eigen::AngleAxisf((-lon*D2R), Eigen::Vector3f::UnitY());  
       pcl::transformPointCloud(*cloud_, *cloud_, lon_tran);
 
       pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
