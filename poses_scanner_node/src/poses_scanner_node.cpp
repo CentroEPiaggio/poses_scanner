@@ -94,10 +94,12 @@ bool keep_acquiring(true);
 std::vector<int> lati;
 std::vector<int> longi;
 
-void keybReview (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
+/*void keybReview (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
 {
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
 }
+*/
+
 //viewer callbacks
 void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
 {
@@ -136,7 +138,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     viewer->removePointCloud("Cropped");
     viewer->removePointCloud("Scene");
     viewer->removeCoordinateSystem();
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,200,0,0,"end");
+    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
   }
   if (event.getKeySym () == "r" && event.keyDown () && cropped == true && revision ==false)
   {
@@ -178,7 +180,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     viewer->removeShape("viewpoint");
     viewer->removePointCloud("pose");
     viewer->removeCoordinateSystem();
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,200,0,0,"end");
+    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     proceed = true;
   }
 }
@@ -188,7 +190,7 @@ void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
   if (cropped || revision)
     return;
-  viewer->removeShape("cube"); //TODO adjust cube based on kuka position (should be 90° lat when acquiring a table)
+  viewer->removeShape("cube"); //TODO adjust cube based on kuka position (should be ~90° lat when acquiring a table)
   event.getPoint (centre[0], centre[1], centre[2]);
   selection.xmin = centre[0] - 0.17;
   selection.xmax = centre[0] + 0.17;
@@ -198,6 +200,25 @@ void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer
   selection.zmax = centre[2] + 0.17;
   viewer->addCube ( selection.xmin, selection.xmax, selection.ymin, selection.ymax, selection.zmin, selection.zmax, 0, 0.9,0.2,"cube");  
 }
+//Area picking callback for viewer (x to activate)
+void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* viewer_void)
+{
+  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);
+  boost::shared_ptr<std::vector<int> > selected (new std::vector<int>);
+  if (event.getPointsIndices	(	*selected ) && revision == true)	
+  {
+    //viewer->removePointCloud("cloud");
+    pcl::PointCloud<pcl::PointXYZRGBA> temp;
+    pcl::ExtractIndices<pcl::PointXYZRGBA> fil (true);
+    fil.setInputCloud (poses[id].makeShared());
+    fil.setIndices (selected);
+    fil.setNegative (true);
+    fil.filter (temp);
+    copyPointCloud(temp, poses[id]);
+    viewer->updatePointCloud(poses[id].makeShared(), "pose");
+  }
+}
+
 //Constructor
 poseGrabber::poseGrabber()
 {
@@ -220,16 +241,16 @@ bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquire
   std::string acquire_scene_srv_name = nh_.resolveName("/scene_acquirer_node/acquire_scene");
   scene_acquirer_node::acquire_scene acquire_srv;
   acquire_srv.request.save = "false";
-  boost::this_thread::sleep (boost::posix_time::microseconds (500000));
+  boost::this_thread::sleep (boost::posix_time::microseconds (300000));
   if ( !ros::service::call<scene_acquirer_node::acquire_scene>(acquire_scene_srv_name, acquire_srv))
   {
     ROS_ERROR("[posesScanner] Acquire scene service failed!");
     return false;
   }
-  boost::this_thread::sleep (boost::posix_time::microseconds (500000));
-  sensor_msgs::PointCloud2 acq ;
-  acq = acquire_srv.response.cloud;
-  pcl::fromROSMsg (acq, *acquired);
+//  boost::this_thread::sleep (boost::posix_time::microseconds (1500000));
+  //sensor_msgs::PointCloud2 acq ;
+  //acq = acquire_srv.response.cloud;
+  pcl::fromROSMsg (acquire_srv.response.cloud, *acquired);
   return true;
 }
 
@@ -513,6 +534,11 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     for (int lon=0; lon<360; lon+=lon_pass)
     {//for cycle in longitude
       //transform into table refernce system
+      cloud_->clear();
+      while (!(get_turnTable_pos() >= lon-1 && get_turnTable_pos() <= lon+1))
+      {
+        boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
+      }
       Eigen::Affine3f t_tran (table_transform_);
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
       if (! acquire_scene (acquired) )
@@ -520,28 +546,29 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         ROS_ERROR("[posesScanner] Cannot acquire a scene!");
         return false;
       }
+     
       pcl::transformPointCloud (*acquired, *cloud_, t_tran);
 
       //Cropping z
       pcl::PassThrough<pcl::PointXYZRGBA> pt;
       pt.setInputCloud (cloud_);
       pt.setFilterFieldName ("z");
-      pt.setFilterLimits (-table_radius_*1.5, table_radius_*1.5);
-      pt.filter (*cloud_);
+      pt.setFilterLimits (-table_radius_*2, table_radius_*2);
+      pt.filter (*acquired);
       //x
-      pt.setInputCloud (cloud_);
+      pt.setInputCloud (acquired);
       pt.setFilterFieldName ("x");
-      pt.setFilterLimits (-table_radius_*1.5,  table_radius_*1.5);
+      pt.setFilterLimits (-table_radius_*2,  table_radius_*2);
       pt.filter (*cloud_);
       //y
       pt.setInputCloud (cloud_);
       pt.setFilterFieldName ("y");
-      pt.setFilterLimits (-0.003, table_radius_*2);
-      pt.filter (*cloud_);
+      pt.setFilterLimits (-0.003, table_radius_*3);
+      pt.filter (*acquired);
       //rotate back
       Eigen::Affine3f lon_tran; 
       lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
-      pcl::transformPointCloud(*cloud_, *cloud_, lon_tran);
+      pcl::transformPointCloud(*acquired, *cloud_, lon_tran);
 
       pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
 
@@ -552,7 +579,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       seg.setOptimizeCoefficients (true);
       seg.setModelType (pcl::SACMODEL_PLANE);
       seg.setMethodType (pcl::SAC_RANSAC);
-      seg.setDistanceThreshold (0.004);
+      seg.setDistanceThreshold (0.005);
       seg.setMaxIterations(2000);
       seg.setInputCloud(cloud_);
       seg.setAxis(Eigen::Vector3f::UnitY());
@@ -564,9 +591,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       exi.setIndices(table_inliers);
       exi.setNegative(true);
       exi.filter(*tmp);
-
-      cloud_->clear();
-     // copyPointCloud(*tmp, *cloud_);
 
       //clustering 
       std::vector<pcl::PointIndices> cluster_indices;
@@ -597,15 +621,13 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
             cloud_->push_back(clusters[i].points[j]);
       } 
 
+//      copyPointCloud(*acquired, *cloud_);
+//
       lati.push_back(lat);
       longi.push_back(lon);
       //publish pose 
       pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
-      //save pose on disk
-      pcl::PCDWriter writer;
-      std::string filename (current_session.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
-      writer.writeBinaryCompressed (filename.c_str(), *cloud_);
-      //and in memory
+      //save poses in memory
       poses.push_back(*cloud_);
       //move table
       for (int t=1; t<=lon_pass; ++t)
@@ -640,7 +662,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     keep_acquiring = false;
     revision = true;
     viewer->removeShape("end");
-    viewer->addText("Press 'n-p' to view next/previous pose.\nTo restart the whole acquisition process press 'r'\nOtherwise press 't' to proceed.", 25,25,18,0,200,0,"info");
+    viewer->addText("Press 'n-p' to view next/previous pose.\nTo restart the whole acquisition process press 'r'. Otherwise press 't' to proceed.\nQuick cropping with mouse is activable by pressing 'x', changes will not be saved to disk unless 't' is pressed.", 25,25,18,0,200,0,"info");
     viewer->addCoordinateSystem(0.2);
     while (!proceed)
     {
@@ -649,6 +671,16 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     viewer->spinOnce(100); //one last spin to update viewer
     revision = false;
     proceed = false;
+    pcl::PCDWriter writer;
+    if (!keep_acquiring)
+    {
+      for (int i=0; i<poses.size(); ++i)
+      {
+        //save poses on disk
+        std::string filename (current_session.string() + "/" + name + "_" + std::to_string(lati[i]) + "_" + std::to_string(longi[i]) + ".pcd" );
+        writer.writeBinaryCompressed (filename.c_str(), poses[i]);
+      }
+    }
   }
   return true;
 }
@@ -659,7 +691,8 @@ int main(int argc, char **argv)
     poseGrabber pose_scanner_node;
     viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
     viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,200,0,0,"end");
+    viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
+    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     viewer->spinOnce(100);
     ROS_INFO("[posesScanner] Starting Poses Scanner Node, waiting for service calls...\n");
     ros::spin();
