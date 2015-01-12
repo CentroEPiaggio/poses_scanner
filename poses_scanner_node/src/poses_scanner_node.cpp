@@ -122,7 +122,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     viewer->removeShape("Scene");
     viewer->addPointCloud(cloud_crop_, "Cropped");
     cropped = true;
-    viewer->updateText("If unsatisfied press r to reset, otherwise press t to proceed.", 25,25,18,0,200,0,"info1");
+    viewer->updateText("If unsatisfied press 'r' to reset, otherwise press 't' to proceed.", 25,25,18,0,200,0,"info1");
   }
   if (event.getKeySym () == "t" && event.keyDown () )
   {
@@ -142,7 +142,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
   {
     cropped = false;
     viewer->removeShape("Cropped");
-    viewer->updateText("Hold Shift and Leftclick the center Point on the table.\n When satisfied with the region selection, press c", 25,25,18,0,200,0,"info1");
+    viewer->updateText("Hold 'Shift' and 'Leftclick' the centre of the table.\n When satisfied with the region selection, press 'c'", 25,25,18,0,200,0,"info1");
     viewer->addPointCloud(cloud_original_, "Scene");
     selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
   }
@@ -300,7 +300,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   viewer->addPointCloud(cloud_, "Scene");
   viewer->setWindowName("Table Scene");
   viewer->addCoordinateSystem(0.2);
-  viewer->addText("Hold Shift and Leftclick the center Point on the table.\n When satisfied with the region selection, press c", 25,25,18,0,200,0,"info1");
+  viewer->addText("Hold 'Shift' and 'Leftclick' the centre of the table.\n When satisfied with the region selection, press 'c'", 25,25,18,0,200,0,"info1");
   //wait user to toy with viewer
   while (!proceed)
   {
@@ -395,7 +395,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   viewer->removeShape("end");
   viewer->setWindowName("Final Table Model");
   viewer->addPointCloud(cloud_, "final");
-  viewer->addText("Final table model, press t to proceed.", 25,25,18,0,200,0,"info");
+  viewer->addText("Final table model, press 't' to proceed.", 25,25,18,0,200,0,"info");
   viewer->addCoordinateSystem(0.2);
   while (!proceed)
   {
@@ -526,12 +526,12 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       pcl::PassThrough<pcl::PointXYZRGBA> pt;
       pt.setInputCloud (cloud_);
       pt.setFilterFieldName ("z");
-      pt.setFilterLimits (-table_radius_-0.01, table_radius_+0.01);
+      pt.setFilterLimits (-table_radius_*1.5, table_radius_*1.5);
       pt.filter (*cloud_);
       //x
       pt.setInputCloud (cloud_);
       pt.setFilterFieldName ("x");
-      pt.setFilterLimits (-table_radius_-0.01,  table_radius_+0.01);
+      pt.setFilterLimits (-table_radius_*1.5,  table_radius_*1.5);
       pt.filter (*cloud_);
       //y
       pt.setInputCloud (cloud_);
@@ -540,7 +540,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       pt.filter (*cloud_);
       //rotate back
       Eigen::Affine3f lon_tran; 
-      lon_tran = Eigen::AngleAxisf((-lon*D2R), Eigen::Vector3f::UnitY());  
+      lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
       pcl::transformPointCloud(*cloud_, *cloud_, lon_tran);
 
       pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
@@ -566,7 +566,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       exi.filter(*tmp);
 
       cloud_->clear();
-      copyPointCloud(*tmp, *cloud_);
+     // copyPointCloud(*tmp, *cloud_);
 
       //clustering 
       std::vector<pcl::PointIndices> cluster_indices;
@@ -587,6 +587,8 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         clusters.resize(cluster_indices.size());
         for (int i=1; i< cluster_indices.size(); ++i)
         {
+          exi.setNegative(false);
+          exi.setInputCloud(tmp);
           exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
           exi.filter(clusters[i]);
         }
@@ -638,7 +640,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     keep_acquiring = false;
     revision = true;
     viewer->removeShape("end");
-    viewer->addText("Press 'n-p' to view next/previous pose.\nTo restart the whole acquisition process press 'r'\nOtherwise press t to proceed.", 25,25,18,0,200,0,"info");
+    viewer->addText("Press 'n-p' to view next/previous pose.\nTo restart the whole acquisition process press 'r'\nOtherwise press 't' to proceed.", 25,25,18,0,200,0,"info");
     viewer->addCoordinateSystem(0.2);
     while (!proceed)
     {
@@ -650,78 +652,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   }
   return true;
 }
-/*
-
-  //Saving Scene
-
-  pt.setInputCloud (cloud_ptr);
-  pt.setFilterFieldName ("y");
-  pt.setFilterLimits (-0.002 ,radius);
-  pt.filter (*cloud_filt_ptr);
-  pcl::copyPointCloud (*cloud_filt_ptr, *cloud_ptr);
-
-  //Plane model segmentation 
-  double norm_thresh = 5;  //tollerance in degress
-  pcl::ModelCoefficients::Ptr plane (new pcl::ModelCoefficients);
-  pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
-  pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
-  Eigen::Vector3f Yaxis;
-  Yaxis.UnitY();
-  seg.setOptimizeCoefficients (true);
-  seg.setModelType (pcl::SACMODEL_PLANE);
-  seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.003);   //3 mm
-  seg.setMaxIterations(2000);
-  seg.setAxis(Yaxis);
-  seg.setEpsAngle(norm_thresh / 180 * 3.14159265359);
-  seg.setInputCloud (cloud_ptr);
-  seg.segment (*inliers, *plane);
-  pcl::ExtractIndices<pcl::PointXYZRGBA> extract;
-  extract.setInputCloud (cloud_ptr);
-  extract.setIndices (inliers);
-  extract.setNegative (true);
-  extract.filter (*cloud_filt_ptr);
-  pcl::copyPointCloud (*cloud_filt_ptr, *cloud_ptr);
-
-  //statistical outlier removal
-  pcl::StatisticalOutlierRemoval<pcl::PointXYZRGBA> filt;
-  filt.setInputCloud(cloud_ptr);
-  filt.setMeanK(60);
-  filt.setStddevMulThresh (1.5);
-  filt.filter(*cloud_filt_ptr);
-  pcl::copyPointCloud (*cloud_filt_ptr, *cloud_ptr);
-
-
-  Eigen::Affine3f rotation;
-  float rot_angle;
-  rot_angle = req.angle;
-  rot_angle /= 180;
-  rot_angle *= 3.14159265359;
-  rotation = Eigen::AngleAxisf(rot_angle, Eigen::Vector3f::UnitY());   
-  pcl::transformPointCloud (*cloud_ptr, *cloud_ptr, rotation);
-
-  pcl::visualization::PCLVisualizer v;
-  v.addPointCloud(cloud_ptr, "c");
-  v.addCoordinateSystem(0.15);
-  v.addText("Object Model", 25,25,18,0,200,0,"obj");
-  while (!v.wasStopped ())
-  {
-    v.spinOnce ();
-    // l.spinOnce ();
-  }
-  v.close();   
-
-  std::string cloudname (req.filename.c_str());
-  std::string path ("/home/kukavision/Projects/Federico_Repo/tesi/Code/RealScanner/tmp/");
-  //      char ang[256];
-  //     sprintf (ang, "%.0f", static_cast<double>(request.angle));
-  //    std::string angs (ang);
-  cloudname += "_" + angs + ".pcd";
-  path += cloudname;
-  writer.writeBinaryCompressed (path.c_str(), *cloud_ptr);
-}
-return true;
-*/
 
 int main(int argc, char **argv)
 {
