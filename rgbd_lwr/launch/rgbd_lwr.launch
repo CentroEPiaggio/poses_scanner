@@ -1,0 +1,24 @@
+<launch>
+  <!-- LAUNCH INTERFACE -->
+  <arg name="robot_name" value="lwr"/>
+
+  <!-- LAUNCH IMPLEMENTATION -->
+
+  <!-- the urdf parameter -->
+  <param name="robot_description" command="$(find xacro)/xacro.py $(find rgbd_on_lwr)/robot/$(arg robot_name).urdf.xacro" />
+
+  <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
+    <rosparam param="source_list">[/lwr/joint_states]</rosparam>
+  </node>
+
+  <node name="robot_state_publisher" pkg="robot_state_publisher" type="state_publisher"  />
+
+  <!-- load controllers -->
+  <include file="$(find lwr_controllers)/launch/load_controllers.launch"/>
+
+  <!-- load hw interface -->  
+  <include file="$(find lwr_hw)/launch/lwr_hw.launch">
+    <arg name="port" value="49939"/>
+    <arg name="ip" value="192.168.0.10"/>
+  </include>
+</launch>

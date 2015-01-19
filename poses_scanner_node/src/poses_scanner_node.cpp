@@ -621,8 +621,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
             cloud_->push_back(clusters[i].points[j]);
       } 
 
-//      copyPointCloud(*acquired, *cloud_);
-//
       lati.push_back(lat);
       longi.push_back(lon);
       //publish pose 
