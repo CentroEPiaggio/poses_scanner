@@ -32,6 +32,7 @@
 #include "turn_table_interface_node/setPos.h"
 #include "turn_table_interface_node/getPos.h"
 #include "scene_acquirer_node/acquire_scene.h"
+#include "lwr_controllers/PoseRPY.h"
 
 //general utilities
 #include <cmath>
@@ -54,14 +55,18 @@ class poseGrabber
     ros::NodeHandle nh_;
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
+    ros::Publisher pub_lwr_;
     //service callback
     bool acquirePoses(poses_scanner_node::acquire::Request& req, poses_scanner_node::acquire::Response& res);
     bool acquireTable(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
 
     //method to move turn table
     bool set_turnTable_pos(float pos);
-    //methos to read turn table position
+    //method to read turn table position
     float get_turnTable_pos();
+    //method to move lwr
+    bool set_lwr_pose(float radius, float latitude);  
+  
 
     //method to acquire scene from openni2
     bool acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired);
@@ -229,7 +234,8 @@ poseGrabber::poseGrabber()
   table_set_=false;
   table_transform_.setZero();
   //advertise acquired poses
-  pub_poses_ = nh_.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",3);
+  pub_poses_ = nh_.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
+  pub_lwr_ = nh_.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
   pcl::PointCloud<pcl::PointXYZRGBA> a,b;
   cloud_ = a.makeShared();
   scene_ = b.makeShared();
@@ -267,6 +273,30 @@ bool poseGrabber::set_turnTable_pos(float pos)
   boost::this_thread::sleep (boost::posix_time::microseconds (10000));
   return true;
 }
+bool poseGrabber::set_lwr_pose(float radius, float latitude)
+{
+  lwr_controllers::PoseRPY task;
+  //assume centre of table into (-1, 0.3, 0.2) in world robot frame
+/*  task.id = 0;
+  task.position.x = -1 + (radius * cos(latitude*D2R));
+  task.position.y = 0.3;
+  task.position.z = 0.2 + (radius * sin(latitude*D2R)); //z
+  task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
+  task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
+  task.orientation.yaw = -1.57079; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
+  */
+  //assume centre of table into (-0.6, 0, 0.14) in world robot frame
+  task.id = 0;
+  task.position.x = -0.6;
+  task.position.y =  (radius * cos(latitude*D2R));
+  task.position.z = 0.14 + (radius * sin(latitude*D2R)); 
+  task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
+  task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
+  task.orientation.yaw = 0; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
+  pub_lwr_.publish(task); 
+  boost::this_thread::sleep (boost::posix_time::microseconds (5000000));
+  return true;
+}
 float poseGrabber::get_turnTable_pos()
 {
   std::string getPos_srv_name = nh_.resolveName("/turn_table_interface_node/get_table_pos");
@@ -284,6 +314,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   // Requested a table model
   // TODO move kuka over the table (almost 90 degrees latitude) so that table is better acquired
   
+  /* TODO remove comments from here
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
   if (c_pos != 0)
@@ -352,7 +383,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   ransac.setMaxIterations(2000);
   ransac.computeModel();
   Eigen::VectorXf coefficients;
-  ransac.getModelCoefficients(coefficients);
+  ransac.getModelCoefficients(coefficients);  TODO to here */
   /* Coefficients of model are:
    * [0] x coordinate of centre
    * [1] y coordinate of centre
@@ -368,7 +399,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   centre[1]=coefficients[1];
   centre[2]=coefficients[2];
   */
-
+/*TODO from here
   Eigen::Affine3f trasl, RaA;
   trasl = Eigen::Translation3f(-centre);
   // Second Transformation, transalte into table center
@@ -425,11 +456,16 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   viewer->spinOnce(100); //one last spin to update viewer
   proceed = false;
   table_set_=true;
+  
+  TODO to here */
   return true;
 }
 // this function is called when service is called
 bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_scanner_node::acquire::Response &res)
 {
+  set_lwr_pose(req.lon_pass, req.lat_pass); //TODO remove; tmp test to see lwr robot moving
+   
+  /* TODO remove
   std::string home ( std::getenv("HOME") );
   boost::filesystem::path base_dir (home + "/PosesScanner");
   boost::filesystem::path table_trans_file (base_dir.string() + "/table_transform.actual");
@@ -490,7 +526,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       return false;
     }
   }
-  /*  TODO - Set Kuka arm in position  */
+  //  TODO - Set Kuka arm in position  
   
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -680,6 +716,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       }
     }
   }
+  TODO REMOVE */
   return true;
 }
 

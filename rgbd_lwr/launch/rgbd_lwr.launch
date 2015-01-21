@@ -5,7 +5,7 @@
   <!-- LAUNCH IMPLEMENTATION -->
 
   <!-- the urdf parameter -->
-  <param name="robot_description" command="$(find xacro)/xacro.py $(find rgbd_on_lwr)/robot/$(arg robot_name).urdf.xacro" />
+  <param name="robot_description" command="$(find xacro)/xacro.py $(find rgbd_lwr)/robot/$(arg robot_name).urdf.xacro" />
 
   <node name="joint_state_publisher" pkg="joint_state_publisher" type="joint_state_publisher">
     <rosparam param="source_list">[/lwr/joint_states]</rosparam>
