@@ -73,7 +73,9 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    Eigen::Matrix4f table_transform_;
+    Eigen::Matrix4f table_transform_60;
+    Eigen::Matrix4f table_transform_40;
+    Eigen::Matrix4f table_transform_20;
     float table_radius_;
     bool table_set_;
     boost::posix_time::ptime timestamp_;
@@ -197,12 +199,12 @@ void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer
     return;
   viewer->removeShape("cube"); //TODO adjust cube based on kuka position (should be ~90° lat when acquiring a table)
   event.getPoint (centre[0], centre[1], centre[2]);
-  selection.xmin = centre[0] - 0.17;
-  selection.xmax = centre[0] + 0.17;
-  selection.ymin = centre[1] - 0.07;
-  selection.ymax = centre[1] + 0.07;
-  selection.zmin = centre[2] - 0.17;
-  selection.zmax = centre[2] + 0.17;
+  selection.xmin = centre[0] - 0.2;
+  selection.xmax = centre[0] + 0.2;
+  selection.ymin = centre[1] - 0.2;
+  selection.ymax = centre[1] + 0.2;
+  selection.zmin = centre[2] - 0.2;
+  selection.zmax = centre[2] + 0.2;
   viewer->addCube ( selection.xmin, selection.xmax, selection.ymin, selection.ymax, selection.zmin, selection.zmax, 0, 0.9,0.2,"cube");  
 }
 //Area picking callback for viewer (x to activate)
@@ -232,7 +234,9 @@ poseGrabber::poseGrabber()
   srv_acquire_ = nh_.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
   srv_table_ = nh_.advertiseService("acquire_table_model", &poseGrabber::acquireTable, this);
   table_set_=false;
-  table_transform_.setZero();
+  table_transform_60.setZero();
+  table_transform_40.setZero();
+  table_transform_20.setZero();
   //advertise acquired poses
   pub_poses_ = nh_.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
   pub_lwr_ = nh_.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
@@ -285,16 +289,15 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
   task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
   task.orientation.yaw = -1.57079; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
   */
-  //assume centre of table into (-0.6, 0, 0.14) in world robot frame
+  //assume centre of table into (-0.6, -0.2, 0.13) in world robot frame
   task.id = 0;
   task.position.x = -0.6;
-  task.position.y =  (radius * cos(latitude*D2R));
-  task.position.z = 0.14 + (radius * sin(latitude*D2R)); 
+  task.position.y =  -0.2 + (radius * cos(latitude*D2R));
+  task.position.z = 0.13 + (radius * sin(latitude*D2R)); 
   task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
   task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
   task.orientation.yaw = 0; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
   pub_lwr_.publish(task); 
-  boost::this_thread::sleep (boost::posix_time::microseconds (5000000));
   return true;
 }
 float poseGrabber::get_turnTable_pos()
@@ -312,9 +315,10 @@ float poseGrabber::get_turnTable_pos()
 bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
   // Requested a table model
-  // TODO move kuka over the table (almost 90 degrees latitude) so that table is better acquired
-  
-  /* TODO remove comments from here
+    
+  //put lwr as high as possible to better see table
+  set_lwr_pose(0.9, 60);  
+
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
   if (c_pos != 0)
@@ -329,6 +333,8 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
       }
     }
   }
+  boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  
   cropped = false;
   centre.setZero();
   selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
@@ -383,7 +389,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   ransac.setMaxIterations(2000);
   ransac.computeModel();
   Eigen::VectorXf coefficients;
-  ransac.getModelCoefficients(coefficients);  TODO to here */
+  ransac.getModelCoefficients(coefficients);  
   /* Coefficients of model are:
    * [0] x coordinate of centre
    * [1] y coordinate of centre
@@ -399,7 +405,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   centre[1]=coefficients[1];
   centre[2]=coefficients[2];
   */
-/*TODO from here
+
   Eigen::Affine3f trasl, RaA;
   trasl = Eigen::Translation3f(-centre);
   // Second Transformation, transalte into table center
@@ -415,7 +421,7 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
     normal *= -1; //sometimes the normal gets under the table (unpredicatably)
     std::cout<<"Flipped Table Normal\n";
   }
-  //get rotation from old y axis to new y (table normal)
+  //get rotation from old y axis to new y (table normal) //TODO change transformation so that z points upwards (not y)
   Eigen::Vector3f yaxis (0,1,0);
   Eigen::Vector3f rot_axis;
   rot_axis = normal.cross(yaxis);
@@ -457,15 +463,13 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   proceed = false;
   table_set_=true;
   
-  TODO to here */
   return true;
 }
+
 // this function is called when service is called
 bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_scanner_node::acquire::Response &res)
 {
-  set_lwr_pose(req.lon_pass, req.lat_pass); //TODO remove; tmp test to see lwr robot moving
    
-  /* TODO remove
   std::string home ( std::getenv("HOME") );
   boost::filesystem::path base_dir (home + "/PosesScanner");
   boost::filesystem::path table_trans_file (base_dir.string() + "/table_transform.actual");
@@ -526,28 +530,10 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       return false;
     }
   }
-  //  TODO - Set Kuka arm in position  
-  
-  // move table to 0 position, if not there already
-  float c_pos = get_turnTable_pos();
-  if (c_pos != 0)
-  {
-    float step = -c_pos/360;
-    for (int i=1; i<=360; i++)
-    {
-      if(!set_turnTable_pos(c_pos + step*i) )
-      {
-        ROS_ERROR("[posesScanner] turnTable communication failed!");
-        return false;
-      }
-    }
-  }
   keep_acquiring = true;
   revision = false;
-  int lat_pass = req.lat_pass;
   int lon_pass = req.lon_pass;
   std::string name = req.objname;
- // std::string topic = nh_.resolveName("/camera/depth_registered/points");
   //create directory to store poses writes into "~/PosesScanner/"
   if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
   {
@@ -565,125 +551,149 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     lati.clear();
     longi.clear();
     id=0;
-    //for cycle in latitude TODO
-    int lat = req.lat_pass; //tmp lat workaround (set fixed latitute from service instead of pass)  TODO remove
-    for (int lon=0; lon<360; lon+=lon_pass)
-    {//for cycle in longitude
-      //transform into table refernce system
-      cloud_->clear();
-      while (!(get_turnTable_pos() >= lon-1 && get_turnTable_pos() <= lon+1))
+    //for cycle in latitude 
+    for (int lat = 60;  lat > 10; lat-=20) //fixed latitude pass (goes to 60, 40 and 20)
+    {
+      //move lwr in position  
+      set_lwr_pose(0.9,lat);
+      //and table
+      float c_pos = get_turnTable_pos();
+      if (c_pos != 0)
       {
-        boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
-      }
-      Eigen::Affine3f t_tran (table_transform_);
-      pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
-      if (! acquire_scene (acquired) )
-      {
-        ROS_ERROR("[posesScanner] Cannot acquire a scene!");
-        return false;
-      }
-     
-      pcl::transformPointCloud (*acquired, *cloud_, t_tran);
-
-      //Cropping z
-      pcl::PassThrough<pcl::PointXYZRGBA> pt;
-      pt.setInputCloud (cloud_);
-      pt.setFilterFieldName ("z");
-      pt.setFilterLimits (-table_radius_*2, table_radius_*2);
-      pt.filter (*acquired);
-      //x
-      pt.setInputCloud (acquired);
-      pt.setFilterFieldName ("x");
-      pt.setFilterLimits (-table_radius_*2,  table_radius_*2);
-      pt.filter (*cloud_);
-      //y
-      pt.setInputCloud (cloud_);
-      pt.setFilterFieldName ("y");
-      pt.setFilterLimits (-0.003, table_radius_*3);
-      pt.filter (*acquired);
-      //rotate back
-      Eigen::Affine3f lon_tran; 
-      lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
-      pcl::transformPointCloud(*acquired, *cloud_, lon_tran);
-
-      pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
-
-      pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
-      pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
-      pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
-      pcl::SACSegmentation<pcl::PointXYZRGBA> seg(true);
-      seg.setOptimizeCoefficients (true);
-      seg.setModelType (pcl::SACMODEL_PLANE);
-      seg.setMethodType (pcl::SAC_RANSAC);
-      seg.setDistanceThreshold (0.005);
-      seg.setMaxIterations(2000);
-      seg.setInputCloud(cloud_);
-      seg.setAxis(Eigen::Vector3f::UnitY());
-      seg.setEpsAngle(5*D2R);
-      seg.segment (*table_inliers, *coefficients);
-
-      pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
-      exi.setInputCloud(cloud_);
-      exi.setIndices(table_inliers);
-      exi.setNegative(true);
-      exi.filter(*tmp);
-
-      //clustering 
-      std::vector<pcl::PointIndices> cluster_indices;
-      pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
-      ec.setClusterTolerance (0.01);    
-      ec.setMinClusterSize (150);
-      ec.setMaxClusterSize (tmp->points.size());
-      ec.setInputCloud (tmp);
-      ec.extract (cluster_indices);
-      exi.setNegative(false);
-      exi.setInputCloud(tmp);
-      exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
-      exi.filter(*cloud_);
-      if (cluster_indices.size() > 1)
-      { 
-        std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
-        ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
-        clusters.resize(cluster_indices.size());
-        for (int i=1; i< cluster_indices.size(); ++i)
+        float step = -c_pos/360;
+        for (int i=1; i<=360; i++)
         {
-          exi.setNegative(false);
-          exi.setInputCloud(tmp);
-          exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
-          exi.filter(clusters[i]);
+          if(!set_turnTable_pos(c_pos + step*i) )
+          {
+            ROS_ERROR("[posesScanner] turnTable communication failed!");
+            return false;
+          }
         }
-        for (int i=1; i< clusters.size(); ++i)
-          for (int j=0; j< clusters[i].points.size(); ++j)
-            cloud_->push_back(clusters[i].points[j]);
-      } 
-
-      lati.push_back(lat);
-      longi.push_back(lon);
-      //publish pose 
-      pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
-      //save poses in memory
-      poses.push_back(*cloud_);
-      //move table
-      for (int t=1; t<=lon_pass; ++t)
-      {//for table steps: 1 degree
-        if (lon+t >= 360)
-          break; //skip last step
-        if(!set_turnTable_pos(lon+t) )
+      }
+      boost::this_thread::sleep (boost::posix_time::microseconds (5000000)); //wait for it    TODO remove and add topic
+      for (int lon=0; lon<360; lon+=lon_pass)
+      {//for cycle in longitude
+        cloud_->clear();
+        while (!(get_turnTable_pos() >= lon-1 && get_turnTable_pos() <= lon+1))
         {
-          ROS_ERROR("[posesScanner] turnTable communication failed!");
+          if(!set_turnTable_pos(lon) )
+          {
+            ROS_ERROR("[posesScanner] turnTable communication failed!");
+            return false;
+          }
+          boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
+        }
+        Eigen::Affine3f t_tran (table_transform_);
+        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
+        if (! acquire_scene (acquired) )
+        {
+          ROS_ERROR("[posesScanner] Cannot acquire a scene!");
           return false;
+        }
+        
+        //take into account latitude variation
+        Eigen::Affine3f lat_tran;
+        lat_tran = Eigen::AngleAxisf( (-60+lat)*D2R, Eigen::Vector3f::UnitX() );
+        pcl::transformPointCloud(*acquired, *cloud_, lat_tran);
+
+        //transform into table refernce system
+        pcl::transformPointCloud (*cloud_, *cloud_, t_tran);
+        //take into account latitude variation
+       // Eigen::Affine3f lat_tran;
+       // lat_tran = Eigen::AngleAxisf( (60-lat)*D2R, Eigen::Vector3f::UnitX() );
+        //pcl::transformPointCloud(*cloud_, *cloud_, lat_tran);
+
+        //Cropping z
+        pcl::PassThrough<pcl::PointXYZRGBA> pt;
+        pt.setInputCloud (cloud_);
+        pt.setFilterFieldName ("z");
+        pt.setFilterLimits (-table_radius_*2, table_radius_*2);
+        pt.filter (*acquired);
+        //x
+        pt.setInputCloud (acquired);
+        pt.setFilterFieldName ("x");
+        pt.setFilterLimits (-table_radius_*2,  table_radius_*2);
+        pt.filter (*cloud_);
+        //y
+        pt.setInputCloud (cloud_);
+        pt.setFilterFieldName ("y");
+        pt.setFilterLimits (-0.003, table_radius_*3);
+        pt.filter (*acquired);
+        //rotate back
+        Eigen::Affine3f lon_tran; 
+        lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
+        pcl::transformPointCloud(*acquired, *cloud_, lon_tran);
+
+        pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
+
+        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+        pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
+        pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+        pcl::SACSegmentation<pcl::PointXYZRGBA> seg(true);
+        seg.setOptimizeCoefficients (true);
+        seg.setModelType (pcl::SACMODEL_PLANE);
+        seg.setMethodType (pcl::SAC_RANSAC);
+        seg.setDistanceThreshold (0.005);
+        seg.setMaxIterations(2000);
+        seg.setInputCloud(cloud_);
+        seg.setAxis(Eigen::Vector3f::UnitY());
+        seg.setEpsAngle(5*D2R);
+        seg.segment (*table_inliers, *coefficients);
+
+        pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
+        exi.setInputCloud(cloud_);
+        exi.setIndices(table_inliers);
+        exi.setNegative(true);
+        exi.filter(*tmp);
+
+        //clustering 
+        std::vector<pcl::PointIndices> cluster_indices;
+        pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
+        ec.setClusterTolerance (0.01);    
+        ec.setMinClusterSize (150);
+        ec.setMaxClusterSize (tmp->points.size());
+        ec.setInputCloud (tmp);
+        ec.extract (cluster_indices);
+        exi.setNegative(false);
+        exi.setInputCloud(tmp);
+        exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
+        exi.filter(*cloud_);
+        if (cluster_indices.size() > 1)
+        { 
+          std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
+          ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
+          clusters.resize(cluster_indices.size());
+          for (int i=1; i< cluster_indices.size(); ++i)
+          {
+            exi.setNegative(false);
+            exi.setInputCloud(tmp);
+            exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
+            exi.filter(clusters[i]);
+          }
+          for (int i=1; i< clusters.size(); ++i)
+            for (int j=0; j< clusters[i].points.size(); ++j)
+              cloud_->push_back(clusters[i].points[j]);
+        } 
+
+        lati.push_back(lat);
+        longi.push_back(lon);
+        //publish pose 
+        pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
+        //save poses in memory
+        poses.push_back(*cloud_);
+        //move table
+        for (int t=1; t<=lon_pass; ++t)
+        {//for table steps: 1 degree
+          if (lon+t >= 360)
+            break; //skip last step
+          if(!set_turnTable_pos(lon+t) )
+          {
+            ROS_ERROR("[posesScanner] turnTable communication failed!");
+            return false;
+          }
         }
       }
     }//end of acquisitions
-    //put table back at zero
-    for (int t=358; t>=0; --t)
-    {//for table steps: 1 degree
-      if(!set_turnTable_pos(t) )
-      {
-        ROS_ERROR("[posesScanner] turnTable communication failed!");
-        return false;
-      }
-    }
     //prompt user to review acquired poses, if not satisfied, start all over again 
     viewer->addPointCloud(poses[0].makeShared(), "pose");
     viewer->setWindowName("Acquired Poses");
@@ -716,7 +726,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       }
     }
   }
-  TODO REMOVE */
   return true;
 }
 

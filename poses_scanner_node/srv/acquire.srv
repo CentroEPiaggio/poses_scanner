@@ -1,5 +1,4 @@
 string objname
-int64 lat_pass
 int64 lon_pass
 ---
 
