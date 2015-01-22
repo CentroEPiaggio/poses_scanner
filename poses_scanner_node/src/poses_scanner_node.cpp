@@ -7,6 +7,8 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud_conversion.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <tf/transform_broadcaster.h>
+#include <tf/transform_datatypes.h>
 
 // PCL headers
 #include <pcl/common/eigen.h>
@@ -51,8 +53,8 @@ class poseGrabber
 {
   public:
     poseGrabber();
+    ros::NodeHandle nh;
   private:
-    ros::NodeHandle nh_;
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
     ros::Publisher pub_lwr_;
@@ -73,9 +75,7 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    Eigen::Matrix4f table_transform_60;
-    Eigen::Matrix4f table_transform_40;
-    Eigen::Matrix4f table_transform_20;
+    Eigen::Matrix4f table_transform_;
     float table_radius_;
     bool table_set_;
     boost::posix_time::ptime timestamp_;
@@ -229,17 +229,15 @@ void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* 
 //Constructor
 poseGrabber::poseGrabber()
 {
-  nh_ = ros::NodeHandle("poses_scanner_node");
+  nh = ros::NodeHandle("poses_scanner_node");
   //service callbacks
-  srv_acquire_ = nh_.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
-  srv_table_ = nh_.advertiseService("acquire_table_model", &poseGrabber::acquireTable, this);
+  srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
+  srv_table_ = nh.advertiseService("acquire_table_model", &poseGrabber::acquireTable, this);
   table_set_=false;
-  table_transform_60.setZero();
-  table_transform_40.setZero();
-  table_transform_20.setZero();
+  table_transform_.setZero();
   //advertise acquired poses
-  pub_poses_ = nh_.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
-  pub_lwr_ = nh_.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
+  pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
+  pub_lwr_ = nh.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
   pcl::PointCloud<pcl::PointXYZRGBA> a,b;
   cloud_ = a.makeShared();
   scene_ = b.makeShared();
@@ -248,7 +246,7 @@ poseGrabber::poseGrabber()
 
 bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
 { 
-  std::string acquire_scene_srv_name = nh_.resolveName("/scene_acquirer_node/acquire_scene");
+  std::string acquire_scene_srv_name = nh.resolveName("/scene_acquirer_node/acquire_scene");
   scene_acquirer_node::acquire_scene acquire_srv;
   acquire_srv.request.save = "false";
   boost::this_thread::sleep (boost::posix_time::microseconds (300000));
@@ -266,7 +264,7 @@ bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquire
 
 bool poseGrabber::set_turnTable_pos(float pos)
 {
-  std::string setPos_srv_name = nh_.resolveName("/turn_table_interface_node/set_table_pos");
+  std::string setPos_srv_name = nh.resolveName("/turn_table_interface_node/set_table_pos");
   turn_table_interface_node::setPos set_srv;
   set_srv.request.position = pos;
   if ( !ros::service::call<turn_table_interface_node::setPos>(setPos_srv_name, set_srv) )
@@ -302,7 +300,7 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
 }
 float poseGrabber::get_turnTable_pos()
 {
-  std::string getPos_srv_name = nh_.resolveName("/turn_table_interface_node/get_table_pos");
+  std::string getPos_srv_name = nh.resolveName("/turn_table_interface_node/get_table_pos");
   turn_table_interface_node::getPos get_srv;
   if ( !ros::service::call<turn_table_interface_node::getPos>(getPos_srv_name, get_srv) )
   {
@@ -732,13 +730,21 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
 int main(int argc, char **argv)
 {
     ros::init(argc, argv, "poses_scanner_node");
-    poseGrabber pose_scanner_node;
+    poseGrabber poses_scanner_node;
     viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
     viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
     viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
+    tf::TransformBroadcaster br_w_t;
+    tf::Transform w_t;
+    w_t.setOrigin (tf::Vector3 (-0.6, -0.2, 0.13)); //fixed turn table transform
+    w_t.setRotation ( tf::Quaternion(0, 0, 0.707106781, 0.707106781) );
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     viewer->spinOnce(100);
-    ROS_INFO("[posesScanner] Starting Poses Scanner Node, waiting for service calls...\n");
-    ros::spin();
+    ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
+    while (poses_scanner_node.nh.ok())
+    {
+      br_w_t.sendTransform(tf::StampedTransform( w_t, ros::Time::now(), "world", "table" ));
+      ros::spinOnce();
+    }
     return 0;
 }

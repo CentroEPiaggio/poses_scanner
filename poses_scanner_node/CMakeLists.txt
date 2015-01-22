@@ -5,7 +5,7 @@ project(poses_scanner_node)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED roscpp std_srvs sensor_msgs pcl_ros pcl_conversions message_generation)
+find_package(catkin REQUIRED roscpp std_srvs sensor_msgs pcl_ros pcl_conversions message_generation tf)
 find_package(PCL 1.7 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
