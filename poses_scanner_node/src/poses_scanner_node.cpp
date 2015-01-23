@@ -9,6 +9,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <tf/transform_broadcaster.h>
 #include <tf/transform_datatypes.h>
+#include <tf/tf.h>
 
 // PCL headers
 #include <pcl/common/eigen.h>
@@ -54,13 +55,14 @@ class poseGrabber
   public:
     poseGrabber();
     ros::NodeHandle nh;
+    tf::Transform T_7_c; //transformation to lwr 7 link to camera
   private:
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
     ros::Publisher pub_lwr_;
     //service callback
     bool acquirePoses(poses_scanner_node::acquire::Request& req, poses_scanner_node::acquire::Response& res);
-    bool acquireTable(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
+    bool calibrate(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
 
     //method to move turn table
     bool set_turnTable_pos(float pos);
@@ -69,15 +71,12 @@ class poseGrabber
     //method to move lwr
     bool set_lwr_pose(float radius, float latitude);  
   
-
     //method to acquire scene from openni2
     bool acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired);
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    Eigen::Matrix4f table_transform_;
-    float table_radius_;
-    bool table_set_;
+    bool calibration_;
     boost::posix_time::ptime timestamp_;
 };
 
@@ -101,13 +100,7 @@ bool keep_acquiring(true);
 std::vector<int> lati;
 std::vector<int> longi;
 
-/*void keybReview (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
-{
-  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
-}
-*/
-
-//viewer callbacks
+//viewer callbacks (keyboard)
 void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
 {
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
@@ -136,7 +129,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
   if (event.getKeySym () == "t" && event.keyDown () )
   {
     proceed=true;
-    viewer->removeShape("viewpoint");
+//    viewer->removeShape("viewpoint");
     viewer->removePointCloud("pose");
     viewer->removeShape("info1");
     viewer->removeShape("cube");
@@ -160,31 +153,33 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     if (++id >= poses.size() )
       id=poses.size()-1;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    viewer->removeShape("viewpoint");
+ /*   viewer->removeShape("viewpoint");
     pcl::PointXYZ a,b;
     a.x=a.y=a.z=0;
     b.y= 0.5 * sin(lati[id]*D2R);
     b.z= 0.5 * cos(lati[id]*D2R)*cos(longi[id]*D2R);
     b.x= 0.5 * cos(lati[id]*D2R)*sin(longi[id]*D2R);
     viewer->addLine(a,b,0,1,1,"viewpoint");
+    */
   }
   if (event.getKeySym () == "p" && event.keyDown () && revision ==true)
   {
     if (--id <= 0)
       id = 0;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    viewer->removeShape("viewpoint");
+/*    viewer->removeShape("viewpoint");
     pcl::PointXYZ a,b;
     a.x=a.y=a.z=0;
     b.y= 0.5 * sin(lati[id]*D2R);
     b.z= 0.5 * cos(lati[id]*D2R)*cos(longi[id]*D2R);
     b.x= 0.5 * cos(lati[id]*D2R)*sin(longi[id]*D2R);
     viewer->addLine(a,b,0,1,1,"viewpoint");
+    */
   }
   if (event.getKeySym () == "r" && event.keyDown () && revision ==true)
   {
     keep_acquiring = true;
-    viewer->removeShape("viewpoint");
+  //  viewer->removeShape("viewpoint");
     viewer->removePointCloud("pose");
     viewer->removeCoordinateSystem();
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
@@ -192,12 +187,13 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
   }
 }
 
+//pick (shift+clik to activate)
 void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer_void)
 {
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
   if (cropped || revision)
     return;
-  viewer->removeShape("cube"); //TODO adjust cube based on kuka position (should be ~90° lat when acquiring a table)
+  viewer->removeShape("cube"); 
   event.getPoint (centre[0], centre[1], centre[2]);
   selection.xmin = centre[0] - 0.2;
   selection.xmax = centre[0] + 0.2;
@@ -207,7 +203,8 @@ void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer
   selection.zmax = centre[2] + 0.2;
   viewer->addCube ( selection.xmin, selection.xmax, selection.ymin, selection.ymax, selection.zmin, selection.zmax, 0, 0.9,0.2,"cube");  
 }
-//Area picking callback for viewer (x to activate)
+
+//Area picking (x to activate)
 void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* viewer_void)
 {
   boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);
@@ -226,24 +223,80 @@ void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* 
   }
 }
 
-//Constructor
+//Class Constructor
 poseGrabber::poseGrabber()
 {
   nh = ros::NodeHandle("poses_scanner_node");
   //service callbacks
   srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
-  srv_table_ = nh.advertiseService("acquire_table_model", &poseGrabber::acquireTable, this);
-  table_set_=false;
-  table_transform_.setZero();
+  srv_table_ = nh.advertiseService("calibrate", &poseGrabber::calibrate, this);
   //advertise acquired poses
   pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
+  //publish to lwr controller
   pub_lwr_ = nh.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
   pcl::PointCloud<pcl::PointXYZRGBA> a,b;
   cloud_ = a.makeShared();
   scene_ = b.makeShared();
   timestamp_ = boost::posix_time::second_clock::local_time();
+  calibration_ = false;
+  //check if we have already calibrated
+  std::string workspace ( std::getenv("ROS_WORKSPACE") );
+  boost::filesystem::path base_dir (workspace + "/../src/poses_scanner/rgbd_lwr/calibration/");
+  boost::filesystem::path calibration_file (base_dir.string() + "/T_7_c.transform");
+  if (boost::filesystem::exists(calibration_file) && boost::filesystem::is_regular_file(calibration_file) )
+  {
+    ifstream t_file (calibration_file.string().c_str());
+    std::string line;
+    if(t_file.is_open())
+    {
+      calibration_ = true;
+      while (getline (t_file, line))
+      {
+        if (line.compare(0,1,"#") == 0)
+        {
+          //do nothing, comment line...
+          continue;
+        }
+        else
+        {
+          std::vector<std::string> vst;
+          boost::trim (line); //remove white spaces from start and end
+          boost::split (vst, line, boost::is_any_of(" "), boost::token_compress_on); 
+          if (vst.size() == 4)
+          {
+            tf::Quaternion rot ( std::stof(vst[0]), std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]) );
+            T_7_c.setRotation(rot);
+          }
+          else if (vst.size() == 3)
+          {
+            tf::Vector3 trasl ( std::stof(vst[0]), std::stof(vst[1]), std::stof(vst[2]) );
+            T_7_c.setOrigin(trasl);
+          }
+          else
+          {
+            ROS_ERROR("[posesScanner] Incorrect calibration file, try rerunning calibration...");
+            T_7_c.setIdentity();
+            calibration_=false;
+            break;
+          }
+        }
+      }
+      ROS_INFO("[posesScanner] Found calibration saved on disk");
+    }
+    else
+    {
+      ROS_ERROR("[posesScanner] Error reading transformation from calibration file...");
+      T_7_c.setIdentity();
+    }
+  }
+  else
+  {
+    ROS_WARN("[posesScanner] Camera is not calibrated, run calibration service, before trying to acquire poses!");
+    T_7_c.setIdentity();
+  }
 }
 
+//wrapper function to grab a cloud
 bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
 { 
   std::string acquire_scene_srv_name = nh.resolveName("/scene_acquirer_node/acquire_scene");
@@ -255,13 +308,11 @@ bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquire
     ROS_ERROR("[posesScanner] Acquire scene service failed!");
     return false;
   }
-//  boost::this_thread::sleep (boost::posix_time::microseconds (1500000));
-  //sensor_msgs::PointCloud2 acq ;
-  //acq = acquire_srv.response.cloud;
   pcl::fromROSMsg (acquire_srv.response.cloud, *acquired);
   return true;
 }
 
+//wrapper function to move turn table
 bool poseGrabber::set_turnTable_pos(float pos)
 {
   std::string setPos_srv_name = nh.resolveName("/turn_table_interface_node/set_table_pos");
@@ -275,18 +326,12 @@ bool poseGrabber::set_turnTable_pos(float pos)
   boost::this_thread::sleep (boost::posix_time::microseconds (10000));
   return true;
 }
+
+//wrapper function to move lwr
 bool poseGrabber::set_lwr_pose(float radius, float latitude)
 {
   lwr_controllers::PoseRPY task;
-  //assume centre of table into (-1, 0.3, 0.2) in world robot frame
-/*  task.id = 0;
-  task.position.x = -1 + (radius * cos(latitude*D2R));
-  task.position.y = 0.3;
-  task.position.z = 0.2 + (radius * sin(latitude*D2R)); //z
-  task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
-  task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
-  task.orientation.yaw = -1.57079; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
-  */
+  
   //assume centre of table into (-0.6, -0.2, 0.13) in world robot frame
   task.id = 0;
   task.position.x = -0.6;
@@ -295,9 +340,13 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
   task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
   task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
   task.orientation.yaw = 0; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
+  
+  //send the task to the robot
   pub_lwr_.publish(task); 
   return true;
 }
+
+//wrapper function to read table position
 float poseGrabber::get_turnTable_pos()
 {
   std::string getPos_srv_name = nh.resolveName("/turn_table_interface_node/get_table_pos");
@@ -310,10 +359,9 @@ float poseGrabber::get_turnTable_pos()
   return get_srv.response.current_pos;
 }
 
-bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
+//service callback for calibration
+bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
-  // Requested a table model
-    
   //put lwr as high as possible to better see table
   set_lwr_pose(0.9, 60);  
 
@@ -331,15 +379,16 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
       }
     }
   }
-  boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (5000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   
   cropped = false;
   centre.setZero();
   selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
 
-  //First transofrmation, invert Y and Z
+  //First transofrmation, rotation by Pi around x (camera link frame) express it in eigen for pcl 
   Eigen::Affine3f RxPi;
-  RxPi = Eigen::AngleAxisf(3.14159265359, Eigen::Vector3f::UnitX());  
+  RxPi = Eigen::AngleAxisf(3.1415962, Eigen::Vector3f::UnitX() );
+
   //wait for a cloud from sensor
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
 
@@ -397,14 +446,8 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
    * [5] y coordinate of normal direction
    * [6] z coordinate of normal direction
    */
-  
-  /* keep centre as clicked point and not centre found with ransac
-  centre[0]=coefficients[0];
-  centre[1]=coefficients[1];
-  centre[2]=coefficients[2];
-  */
 
-  Eigen::Affine3f trasl, RaA;
+  Eigen::Affine3f trasl, RaA, RzPi2;
   trasl = Eigen::Translation3f(-centre);
   // Second Transformation, transalte into table center
   pcl::transformPointCloud (*cloud_crop_, *cloud_, trasl);
@@ -419,35 +462,48 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
     normal *= -1; //sometimes the normal gets under the table (unpredicatably)
     std::cout<<"Flipped Table Normal\n";
   }
-  //get rotation from old y axis to new y (table normal) //TODO change transformation so that z points upwards (not y)
-  Eigen::Vector3f yaxis (0,1,0);
+  //get rotation from old z axis to new z (table normal) 
+  Eigen::Vector3f zaxis (0,0,1);
   Eigen::Vector3f rot_axis;
-  rot_axis = normal.cross(yaxis);
+  rot_axis = normal.cross(zaxis);
   rot_axis.normalize();
-  double angle = acos (normal.dot(yaxis)); //in radians
+  double angle = acos (normal.dot(zaxis)); //in radians
   //get the rotation matrix from axis angle
   RaA = Eigen::AngleAxisf(angle,rot_axis);
-  //Third Transformation, rotate to align yaxis on table normal
+  //Third Transformation, rotate to align zaxis on table normal
   pcl::transformPointCloud (*cloud_, *cloud_, RaA);
-  Eigen::Affine3f f = RaA * trasl * RxPi;
-  table_transform_ = f.matrix();
-  table_radius_ = coefficients[3];
+  //Fourth Transformation, rotate around new z by -pi/2, so that x "points" to the camera
+  RzPi2 = Eigen::AngleAxisf(-3.1415962/2, Eigen::Vector3f::UnitZ());
+  pcl::transformPointCloud (*cloud_, *cloud_, RzPi2);
+  Eigen::Affine3f f = RzPi2 * RaA * trasl * RxPi;
+  Eigen::Matrix4f t = f.matrix(); //save final transformation from camera to table
+  tf::Transform Tct (tf::Matrix3x3( t(0,0), t(0,1), t(0,2), 
+                                    t(1,0), t(1,1), t(1,2),
+                                    t(2,0), t(2,1), t(2,2) ),
+                     tf::Vector3 (  t(0,3), t(1,3), t(2,3)));
+  
+  tf::Transformer trans;
+  tf::StampedTransform T_7_t; //from lwr_7_link to rot_table
+  trans.lookupTransform("rot_table", "lwr_7_link", ros::Time::now() , T_7_t); //fill it
+  T_7_c = Tct.inverseTimes(T_7_t); //return Tct inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
   if (req.save_to_disk)
   {//requested transform saved to disk
-    //create directory to store poses writes into "~/PosesScanner/"
-    std::string home ( std::getenv("HOME") );
-    boost::filesystem::path base_dir (home + "/PosesScanner");
+    //create directory to store transformation in "ROS_WORKSPACE/src/poses_scanner/rgbd_lwr/calibration/"
+    std::string workspace ( std::getenv("ROS_WORKSPACE") );
+    boost::filesystem::path base_dir (workspace + "/../src/poses_scanner/rgbd_lwr/calibration/");
     if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
     {
       boost::filesystem::create_directory(base_dir);
     }
     ofstream trans_file;
-    trans_file.open( (base_dir.string() +  "/table_transform.actual").c_str() );
-    trans_file << "## Table transformation saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
-    trans_file << "## <transformation_matrix 4x4> <newline> <table_radius>" <<std::endl;
-    trans_file << table_transform_ <<std::endl<<table_radius_;
+    trans_file.open( (base_dir.string() +  "/T_7_c.transform").c_str() );
+    trans_file << "## Camera Calibration (lwr_7_link to camera) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
+    trans_file << "## <Rotation quaternion xyzw> <new line> <translation> "<<std::endl;
+    trans_file << T_7_c.getRotation().getX() <<" "<< T_7_c.getRotation().getY()<<" "<< T_7_c.getRotation().getZ()<<" "<<  T_7_c.getRotation().getW()<<std::endl; 
+    trans_file << T_7_c.getOrigin()[0] <<" "<< T_7_c.getOrigin()[1] <<" "<< T_7_c.getOrigin()[2] << std::endl; 
     trans_file.close();
   }
+  
   viewer->removeShape("end");
   viewer->setWindowName("Final Table Model");
   viewer->addPointCloud(cloud_, "final");
@@ -459,80 +515,27 @@ bool poseGrabber::acquireTable(poses_scanner_node::table::Request &req, poses_sc
   }
   viewer->spinOnce(100); //one last spin to update viewer
   proceed = false;
-  table_set_=true;
+  calibration_=true;
+  ROS_INFO("Calibration complete!!");
   
   return true;
 }
 
-// this function is called when service is called
+//service callback to acquire poses
 bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_scanner_node::acquire::Response &res)
 {
-   
-  std::string home ( std::getenv("HOME") );
-  boost::filesystem::path base_dir (home + "/PosesScanner");
-  boost::filesystem::path table_trans_file (base_dir.string() + "/table_transform.actual");
-  if (!table_set_)
+  if (!calibration_)
   {
-    if (boost::filesystem::exists(table_trans_file) && boost::filesystem::is_regular_file(table_trans_file) )
-    {
-      ifstream t_file (table_trans_file.string().c_str());
-      std::string line;
-      if(t_file.is_open())
-      {
-        int i(0);
-        while (getline (t_file, line))
-        {
-          if (line.compare(0,1,"#") == 0)
-          {
-            //do nothing, comment line...
-            continue;
-          }
-          else
-          {
-            std::vector<std::string> vst;
-            boost::trim (line); //remove white spaces from start and end
-            boost::split (vst, line, boost::is_any_of(" "), boost::token_compress_on); 
-            if (vst.size() == 4)
-            {
-              table_transform_(i,0) = std::stof(vst[0]);
-              table_transform_(i,1) = std::stof(vst[1]);
-              table_transform_(i,2) = std::stof(vst[2]);
-              table_transform_(i,3) = std::stof(vst[3]);
-              ++i;
-            }
-            else if (vst.size() == 1)
-            {
-              table_radius_ = std::stof(vst[0]);
-            }
-            else
-            {
-              ROS_ERROR("[posesScanner] Incorrect table transformation file...");
-              return false;
-            }
-          }
-        }
-        table_set_ = true;
-        ROS_INFO("[posesScanner] Found table transformation saved on disk:");
-        std::cout<<table_transform_;
-        ROS_INFO("[posesScanner] With table radius of %g", table_radius_);
-      }
-      else
-      {
-        ROS_ERROR("[posesScanner] Error reading table transformation from file... (can not open file)");
-        return false;
-      }
-    }
-    else
-    {
-      ROS_ERROR("[posesScanner] Set up a table model before trying to acquire poses!");
-      return false;
-    }
+    ROS_ERROR("Camera is not calibrated!! Run calibration service before trying to acquire poses!");
+    return false;
   }
   keep_acquiring = true;
   revision = false;
   int lon_pass = req.lon_pass;
   std::string name = req.objname;
-  //create directory to store poses writes into "~/PosesScanner/"
+  //create directory to store poses writes into "~/PoseScanner"
+  std::string home ( std::getenv("HOME") );
+  boost::filesystem::path base_dir (home + "/PoseScanner");
   if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
   {
     boost::filesystem::create_directory(base_dir);
@@ -581,45 +584,43 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
           }
           boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
         }
-        Eigen::Affine3f t_tran (table_transform_);
+        tf::Transformer cam_tab;
+        tf::StampedTransform T_c_t; //from camera_link to rot_table
+        cam_tab.lookupTransform("turn_table", "camera_link", ros::Time::now() , T_c_t); //search and calculate it
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
         if (! acquire_scene (acquired) )
         {
           ROS_ERROR("[posesScanner] Cannot acquire a scene!");
           return false;
         }
-        
-        //take into account latitude variation
-        Eigen::Affine3f lat_tran;
-        lat_tran = Eigen::AngleAxisf( (-60+lat)*D2R, Eigen::Vector3f::UnitX() );
-        pcl::transformPointCloud(*acquired, *cloud_, lat_tran);
+        //TODO convert stamped_t to eigen ? for pcl
+        Eigen::Quaternionf cal_rot( T_c_t.getRotation().getW(), T_c_t.getRotation().getX(), T_c_t.getRotation().getY(), T_c_t.getRotation().getZ() );
+        Eigen::Matrix<float,3,1> cal_trasl;
+        cal_trasl << T_c_t.getOrigin()[0], T_c_t.getOrigin()[1], T_c_t.getOrigin()[2];
 
-        //transform into table refernce system
-        pcl::transformPointCloud (*cloud_, *cloud_, t_tran);
-        //take into account latitude variation
-       // Eigen::Affine3f lat_tran;
-       // lat_tran = Eigen::AngleAxisf( (60-lat)*D2R, Eigen::Vector3f::UnitX() );
-        //pcl::transformPointCloud(*cloud_, *cloud_, lat_tran);
+        //transform cloud into rot_table reference system
+        pcl::transformPointCloud (*acquired, *cloud_, cal_trasl,cal_rot);
 
         //Cropping z
         pcl::PassThrough<pcl::PointXYZRGBA> pt;
         pt.setInputCloud (cloud_);
         pt.setFilterFieldName ("z");
-        pt.setFilterLimits (-table_radius_*2, table_radius_*2);
+        pt.setFilterLimits (-0.003, 0.4);
         pt.filter (*acquired);
         //x
         pt.setInputCloud (acquired);
         pt.setFilterFieldName ("x");
-        pt.setFilterLimits (-table_radius_*2,  table_radius_*2);
+        pt.setFilterLimits (-0.3,  0.3);
         pt.filter (*cloud_);
         //y
         pt.setInputCloud (cloud_);
         pt.setFilterFieldName ("y");
-        pt.setFilterLimits (-0.003, table_radius_*3);
+        pt.setFilterLimits (-0.3, 0.3);
         pt.filter (*acquired);
-        //rotate back
+        
+        //rotate back of how the table has rotated
         Eigen::Affine3f lon_tran; 
-        lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitY());  
+        lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitZ());  
         pcl::transformPointCloud(*acquired, *cloud_, lon_tran);
 
         pcl::copyPointCloud(*cloud_, *scene_); //save a copy of acquired scene
@@ -634,7 +635,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         seg.setDistanceThreshold (0.005);
         seg.setMaxIterations(2000);
         seg.setInputCloud(cloud_);
-        seg.setAxis(Eigen::Vector3f::UnitY());
+        seg.setAxis(Eigen::Vector3f::UnitZ());
         seg.setEpsAngle(5*D2R);
         seg.segment (*table_inliers, *coefficients);
 
@@ -695,12 +696,13 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     //prompt user to review acquired poses, if not satisfied, start all over again 
     viewer->addPointCloud(poses[0].makeShared(), "pose");
     viewer->setWindowName("Acquired Poses");
-    //viewer->addCoordinateSystem(0.2);
+    /*
     pcl::PointXYZ a,b;
     a.x = a.y = a.z = b.x = 0;
     b.y = 0.5 * sin(lati[0]*D2R);
     b.z = 0.5 * cos(lati[0]*D2R);
     viewer->addLine(a,b,0,1,1,"viewpoint");
+    */
     keep_acquiring = false;
     revision = true;
     viewer->removeShape("end");
@@ -734,7 +736,7 @@ int main(int argc, char **argv)
     viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
     viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
     viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
-    tf::TransformBroadcaster br_w_t;
+    tf::TransformBroadcaster br_w_t, br_7_c;
     tf::Transform w_t;
     w_t.setOrigin (tf::Vector3 (-0.6, -0.2, 0.13)); //fixed turn table transform
     w_t.setRotation ( tf::Quaternion(0, 0, 0.707106781, 0.707106781) );
@@ -743,7 +745,8 @@ int main(int argc, char **argv)
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     while (poses_scanner_node.nh.ok())
     {
-      br_w_t.sendTransform(tf::StampedTransform( w_t, ros::Time::now(), "world", "table" ));
+      br_7_c.sendTransform(tf::StampedTransform( poses_scanner_node.T_7_c, ros::Time::now(), "lwr_7_link", "camera_link") );
+      br_w_t.sendTransform(tf::StampedTransform( w_t, ros::Time::now(), "world", "rot_table" ));
       ros::spinOnce();
     }
     return 0;
