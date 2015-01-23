@@ -15,6 +15,9 @@
   <!-- Launch rgbd lwr node -->
   <include file="$(find rgbd_lwr)/launch/rgbd_lwr.launch" />
 
+  <!-- Launch tf_broadcaster -->
+  <include file="(find tf_table_camera_broadcaster)/launch/tf_table_camera_broadcaster.launch" />
+
 	<!-- the poses scanner node  -->
 	<node name="poses_scanner_node" pkg="poses_scanner_node" type="poses_scanner_node" output="screen" />
 
