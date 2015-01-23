@@ -240,9 +240,10 @@ poseGrabber::poseGrabber()
   timestamp_ = boost::posix_time::second_clock::local_time();
   calibration_ = false;
   //check if we have already calibrated
-  std::string workspace ( std::getenv("ROS_WORKSPACE") );
-  boost::filesystem::path base_dir (workspace + "/../src/poses_scanner/rgbd_lwr/calibration/");
+  std::string home ( std::getenv("HOME") );
+  boost::filesystem::path base_dir (home + "/PoseScanner");
   boost::filesystem::path calibration_file (base_dir.string() + "/T_7_c.transform");
+  T_7_c.setIdentity();
   if (boost::filesystem::exists(calibration_file) && boost::filesystem::is_regular_file(calibration_file) )
   {
     ifstream t_file (calibration_file.string().c_str());
@@ -275,7 +276,6 @@ poseGrabber::poseGrabber()
           else
           {
             ROS_ERROR("[posesScanner] Incorrect calibration file, try rerunning calibration...");
-            T_7_c.setIdentity();
             calibration_=false;
             break;
           }
@@ -286,13 +286,11 @@ poseGrabber::poseGrabber()
     else
     {
       ROS_ERROR("[posesScanner] Error reading transformation from calibration file...");
-      T_7_c.setIdentity();
     }
   }
   else
   {
     ROS_WARN("[posesScanner] Camera is not calibrated, run calibration service, before trying to acquire poses!");
-    T_7_c.setIdentity();
   }
 }
 
@@ -484,13 +482,13 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   
   tf::Transformer trans;
   tf::StampedTransform T_7_t; //from lwr_7_link to rot_table
-  trans.lookupTransform("rot_table", "lwr_7_link", ros::Time::now() , T_7_t); //fill it
+  trans.lookupTransform("rot_table", "lwr_7_link", ros::Time(0), T_7_t); //fill it
   T_7_c = Tct.inverseTimes(T_7_t); //return Tct inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
   if (req.save_to_disk)
   {//requested transform saved to disk
-    //create directory to store transformation in "ROS_WORKSPACE/src/poses_scanner/rgbd_lwr/calibration/"
-    std::string workspace ( std::getenv("ROS_WORKSPACE") );
-    boost::filesystem::path base_dir (workspace + "/../src/poses_scanner/rgbd_lwr/calibration/");
+    //create directory to store transformation in "HOME/PoseScanner"
+    std::string home( std::getenv("HOME") );
+    boost::filesystem::path base_dir (home + "/PoseScanner");
     if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
     {
       boost::filesystem::create_directory(base_dir);
@@ -586,14 +584,13 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         }
         tf::Transformer cam_tab;
         tf::StampedTransform T_c_t; //from camera_link to rot_table
-        cam_tab.lookupTransform("turn_table", "camera_link", ros::Time::now() , T_c_t); //search and calculate it
+        cam_tab.lookupTransform("rot_table", "camera_link", ros::Time(0) , T_c_t); //search and calculate it
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
         if (! acquire_scene (acquired) )
         {
           ROS_ERROR("[posesScanner] Cannot acquire a scene!");
           return false;
         }
-        //TODO convert stamped_t to eigen ? for pcl
         Eigen::Quaternionf cal_rot( T_c_t.getRotation().getW(), T_c_t.getRotation().getX(), T_c_t.getRotation().getY(), T_c_t.getRotation().getZ() );
         Eigen::Matrix<float,3,1> cal_trasl;
         cal_trasl << T_c_t.getOrigin()[0], T_c_t.getOrigin()[1], T_c_t.getOrigin()[2];
@@ -742,12 +739,14 @@ int main(int argc, char **argv)
     w_t.setRotation ( tf::Quaternion(0, 0, 0.707106781, 0.707106781) );
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     viewer->spinOnce(100);
+    ros::Rate rate(10.0);
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     while (poses_scanner_node.nh.ok())
     {
       br_7_c.sendTransform(tf::StampedTransform( poses_scanner_node.T_7_c, ros::Time::now(), "lwr_7_link", "camera_link") );
       br_w_t.sendTransform(tf::StampedTransform( w_t, ros::Time::now(), "world", "rot_table" ));
       ros::spinOnce();
+      rate.sleep();
     }
     return 0;
 }
