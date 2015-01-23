@@ -7,7 +7,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud_conversion.h>
 #include <pcl_conversions/pcl_conversions.h>
-#include <tf/transform_broadcaster.h>
+#include <tf/transform_listener.h>
 #include <tf/transform_datatypes.h>
 #include <tf/tf.h>
 
@@ -55,7 +55,6 @@ class poseGrabber
   public:
     poseGrabber();
     ros::NodeHandle nh;
-    tf::Transform T_7_c; //transformation to lwr 7 link to camera
   private:
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
@@ -78,6 +77,7 @@ class poseGrabber
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
     bool calibration_;
     boost::posix_time::ptime timestamp_;
+    boost::filesystem::path work_dir_;
 };
 
 //global stuff used by viewer callbacks
@@ -241,52 +241,11 @@ poseGrabber::poseGrabber()
   calibration_ = false;
   //check if we have already calibrated
   std::string home ( std::getenv("HOME") );
-  boost::filesystem::path base_dir (home + "/PoseScanner");
-  boost::filesystem::path calibration_file (base_dir.string() + "/T_7_c.transform");
-  T_7_c.setIdentity();
-  if (boost::filesystem::exists(calibration_file) && boost::filesystem::is_regular_file(calibration_file) )
+  work_dir_ = (home + "/PoseScanner");
+  boost::filesystem::path cal_file  (work_dir_.string() + "/T_7_c.transform");
+  if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   {
-    ifstream t_file (calibration_file.string().c_str());
-    std::string line;
-    if(t_file.is_open())
-    {
-      calibration_ = true;
-      while (getline (t_file, line))
-      {
-        if (line.compare(0,1,"#") == 0)
-        {
-          //do nothing, comment line...
-          continue;
-        }
-        else
-        {
-          std::vector<std::string> vst;
-          boost::trim (line); //remove white spaces from start and end
-          boost::split (vst, line, boost::is_any_of(" "), boost::token_compress_on); 
-          if (vst.size() == 4)
-          {
-            tf::Quaternion rot ( std::stof(vst[0]), std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]) );
-            T_7_c.setRotation(rot);
-          }
-          else if (vst.size() == 3)
-          {
-            tf::Vector3 trasl ( std::stof(vst[0]), std::stof(vst[1]), std::stof(vst[2]) );
-            T_7_c.setOrigin(trasl);
-          }
-          else
-          {
-            ROS_ERROR("[posesScanner] Incorrect calibration file, try rerunning calibration...");
-            calibration_=false;
-            break;
-          }
-        }
-      }
-      ROS_INFO("[posesScanner] Found calibration saved on disk");
-    }
-    else
-    {
-      ROS_ERROR("[posesScanner] Error reading transformation from calibration file...");
-    }
+    calibration_ = true;
   }
   else
   {
@@ -398,7 +357,7 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   pcl::transformPointCloud (*acquired, *cloud_, RxPi);
   pcl::copyPointCloud(*cloud_,*cloud_original_); //save a copy before cropping
   pcl::copyPointCloud (*cloud_, *cloud_crop_); //save cloud for callbacks so it can get cropped
-  //
+  
   viewer->removeShape("end");
   viewer->addPointCloud(cloud_, "Scene");
   viewer->setWindowName("Table Scene");
@@ -475,32 +434,31 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   pcl::transformPointCloud (*cloud_, *cloud_, RzPi2);
   Eigen::Affine3f f = RzPi2 * RaA * trasl * RxPi;
   Eigen::Matrix4f t = f.matrix(); //save final transformation from camera to table
-  tf::Transform Tct (tf::Matrix3x3( t(0,0), t(0,1), t(0,2), 
+  tf::Transform T_c_t (tf::Matrix3x3( t(0,0), t(0,1), t(0,2), 
                                     t(1,0), t(1,1), t(1,2),
                                     t(2,0), t(2,1), t(2,2) ),
                      tf::Vector3 (  t(0,3), t(1,3), t(2,3)));
   
-  tf::Transformer trans;
+  tf::TransformListener listen;
   tf::StampedTransform T_7_t; //from lwr_7_link to rot_table
-  trans.lookupTransform("rot_table", "lwr_7_link", ros::Time(0), T_7_t); //fill it
-  T_7_c = Tct.inverseTimes(T_7_t); //return Tct inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
-  if (req.save_to_disk)
-  {//requested transform saved to disk
-    //create directory to store transformation in "HOME/PoseScanner"
-    std::string home( std::getenv("HOME") );
-    boost::filesystem::path base_dir (home + "/PoseScanner");
-    if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
-    {
-      boost::filesystem::create_directory(base_dir);
-    }
-    ofstream trans_file;
-    trans_file.open( (base_dir.string() +  "/T_7_c.transform").c_str() );
-    trans_file << "## Camera Calibration (lwr_7_link to camera) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
-    trans_file << "## <Rotation quaternion xyzw> <new line> <translation> "<<std::endl;
-    trans_file << T_7_c.getRotation().getX() <<" "<< T_7_c.getRotation().getY()<<" "<< T_7_c.getRotation().getZ()<<" "<<  T_7_c.getRotation().getW()<<std::endl; 
-    trans_file << T_7_c.getOrigin()[0] <<" "<< T_7_c.getOrigin()[1] <<" "<< T_7_c.getOrigin()[2] << std::endl; 
-    trans_file.close();
+  tf::Transform T_7_c; //from lwr_7_link to camera (our calibration)
+  listen.lookupTransform("/turn_table", "/lwr_7_link", ros::Time(0), T_7_t); //fill it
+  T_7_c = T_c_t.inverseTimes(T_7_t); //return T_c_t inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
+  
+  //Save transform to disk
+  //create directory to store transformation in "HOME/PoseScanner"
+  if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
+  {
+    boost::filesystem::create_directory(work_dir_);
   }
+  ofstream trans_file;
+  trans_file.open( (work_dir_.string() +  "/T_7_c.transform").c_str() );
+  trans_file << "## Camera Calibration (lwr_7_link to camera) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
+  trans_file << "## <Rotation quaternion xyzw> <new line> <translation> "<<std::endl;
+  trans_file << T_7_c.getRotation().getX() <<" "<< T_7_c.getRotation().getY()<<" "<< T_7_c.getRotation().getZ()<<" "<<  T_7_c.getRotation().getW()<<std::endl; 
+  trans_file << T_7_c.getOrigin()[0] <<" "<< T_7_c.getOrigin()[1] <<" "<< T_7_c.getOrigin()[2] << std::endl; 
+  trans_file.close();
+
   
   viewer->removeShape("end");
   viewer->setWindowName("Final Table Model");
@@ -532,13 +490,11 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   int lon_pass = req.lon_pass;
   std::string name = req.objname;
   //create directory to store poses writes into "~/PoseScanner"
-  std::string home ( std::getenv("HOME") );
-  boost::filesystem::path base_dir (home + "/PoseScanner");
-  if (!boost::filesystem::exists(base_dir) || !boost::filesystem::is_directory(base_dir) )
+  if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
-    boost::filesystem::create_directory(base_dir);
+    boost::filesystem::create_directory(work_dir_);
   }
-  boost::filesystem::path current_session (base_dir.string() + "/Session_" + to_simple_string(timestamp_) ); 
+  boost::filesystem::path current_session (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
   if (!boost::filesystem::exists(current_session) || !boost::filesystem::is_directory(current_session))
   {
     boost::filesystem::create_directory(current_session);
@@ -582,9 +538,9 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
           }
           boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
         }
-        tf::Transformer cam_tab;
+        tf::TransformListener listen;
         tf::StampedTransform T_c_t; //from camera_link to rot_table
-        cam_tab.lookupTransform("rot_table", "camera_link", ros::Time(0) , T_c_t); //search and calculate it
+        listen.lookupTransform("/turn_table", "/camera_link", ros::Time(0) , T_c_t); //search and calculate it
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
         if (! acquire_scene (acquired) )
         {
@@ -733,20 +689,9 @@ int main(int argc, char **argv)
     viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
     viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
     viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
-    tf::TransformBroadcaster br_w_t, br_7_c;
-    tf::Transform w_t;
-    w_t.setOrigin (tf::Vector3 (-0.6, -0.2, 0.13)); //fixed turn table transform
-    w_t.setRotation ( tf::Quaternion(0, 0, 0.707106781, 0.707106781) );
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     viewer->spinOnce(100);
-    ros::Rate rate(10.0);
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
-    while (poses_scanner_node.nh.ok())
-    {
-      br_7_c.sendTransform(tf::StampedTransform( poses_scanner_node.T_7_c, ros::Time::now(), "lwr_7_link", "camera_link") );
-      br_w_t.sendTransform(tf::StampedTransform( w_t, ros::Time::now(), "world", "rot_table" ));
-      ros::spinOnce();
-      rate.sleep();
-    }
+    ros::spin();
     return 0;
 }

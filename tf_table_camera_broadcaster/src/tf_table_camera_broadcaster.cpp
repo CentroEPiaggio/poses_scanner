@@ -94,7 +94,7 @@ broadcaster::broadcaster()
 
 int main(int argc, char **argv)
 {
-    ros::init(argc, argv, "scene_acquirer_node");
+    ros::init(argc, argv, "tf_table_camera_broadcaster");
     broadcaster b;
     ros::Rate rate(10.0);
     ROS_INFO("[tf_broadcaster] Broadcasting transforms");
@@ -154,7 +154,7 @@ int main(int argc, char **argv)
         }
       }
       b.br_7c.sendTransform(StampedTransform( b.T_7_c, ros::Time::now(), "lwr_7_link", "camera_link") );
-      b.br_wt.sendTransform(StampedTransform( b.T_w_t, ros::Time::now(), "world", "rot_table" ));
+      b.br_wt.sendTransform(StampedTransform( b.T_w_t, ros::Time::now(), "world", "turn_table" ));
       ros::spinOnce();
       rate.sleep();
     }
