@@ -59,6 +59,7 @@ class poseGrabber
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
     ros::Publisher pub_lwr_;
+    tf::TransformListener listen_;
     //service callback
     bool acquirePoses(poses_scanner_node::acquire::Request& req, poses_scanner_node::acquire::Response& res);
     bool calibrate(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
@@ -439,10 +440,9 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
                                     t(2,0), t(2,1), t(2,2) ),
                      tf::Vector3 (  t(0,3), t(1,3), t(2,3)));
   
-  tf::TransformListener listen;
   tf::StampedTransform T_7_t; //from lwr_7_link to rot_table
   tf::Transform T_7_c; //from lwr_7_link to camera (our calibration)
-  listen.lookupTransform("/turn_table", "/lwr_7_link", ros::Time(0), T_7_t); //fill it
+  listen_.lookupTransform("/turn_table", "/lwr_7_link", ros::Time(0), T_7_t); //fill it
   T_7_c = T_c_t.inverseTimes(T_7_t); //return T_c_t inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
   
   //Save transform to disk
@@ -538,9 +538,8 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
           }
           boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
         }
-        tf::TransformListener listen;
         tf::StampedTransform T_c_t; //from camera_link to rot_table
-        listen.lookupTransform("/turn_table", "/camera_link", ros::Time(0) , T_c_t); //search and calculate it
+        listen_.lookupTransform("/turn_table", "/camera_link", ros::Time(0) , T_c_t); //search and calculate it
         pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
         if (! acquire_scene (acquired) )
         {
