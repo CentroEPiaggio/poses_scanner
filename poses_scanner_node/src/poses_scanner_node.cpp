@@ -80,6 +80,9 @@ class poseGrabber
     bool calibration_;
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
+
+    tf::Transform T_c_t; //transform from camera to table
+    tf::Transform T_w_7; //transform from world to link_7 (save EE pose when we acquired T_c_t)
 };
 
 //Class Constructor
@@ -104,12 +107,70 @@ poseGrabber::poseGrabber()
   boost::filesystem::path cal_file  (work_dir_.string() + "/table.transform");
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   {
-    calibration_ = true;
-    //TODO review
+    std::ifstream t_file (cal_file.string().c_str());
+    std::string line;
+    if(t_file.is_open())
+    {
+      calibration_ = true;
+      while (getline (t_file, line))
+      {
+        if (line.compare(0,1,"#") == 0)
+        {
+          //do nothing, comment line...
+          continue;
+        }
+        else
+        {
+          std::vector<std::string> vst;
+          boost::trim (line); //remove white spaces from start and end
+          boost::split (vst, line, boost::is_any_of(" "), boost::token_compress_on); 
+          if (vst.size() == 5)
+          {
+            tf::Quaternion rot ( std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]), std::stof(vst[4]) );
+            if (vst.at(0).compare("Tct:") == 0)
+              T_c_t.setRotation(rot);
+            else if (vst.at(0).compare("Tw7:") == 0)
+              T_w_7.setRotation(rot);
+            else
+            {
+              ROS_ERROR("[poses_scanner] Incorrect calibration file, try renunning calibration...");
+              calibration_ = false;
+              break;
+            }
+          }
+          else if (vst.size() == 4)
+          {
+            tf::Vector3 trasl ( std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]) );
+            if (vst.at(0).compare("Tct:") == 0)
+              T_c_t.setOrigin(trasl);
+            else if (vst.at(0).compare("Tw7:") == 0)
+              T_w_7.setOrigin(trasl);
+            else
+            {
+              ROS_ERROR("[poses_scanner] Incorrect calibration file, try renunning calibration...");
+              calibration_ = false;
+              break;
+            }
+          }
+          else
+          {
+            ROS_ERROR("[poses_scanner] Incorrect calibration file, try rerunning calibration...");
+            calibration_ = false;
+            break;
+          }
+        }
+      }
+      ROS_INFO("[poses_scanner] Found calibration saved on disk");
+    }
+    else
+    {
+      ROS_ERROR("[poses_scanner] Error reading transformation from calibration file...");
+      calibration_ = false;
+    }
   }
   else
   {
-    ROS_WARN("[posesScanner] Camera is not calibrated, run calibration service, before trying to acquire poses!");
+    ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
   }
 }
 
@@ -186,8 +247,8 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     if (++id >= poses.size() )
       id=poses.size()-1;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    std::string la(std::to_string(lati[id]);
-    std::string lo(std::to_string(longi[id]);
+    std::string la(std::to_string(lati[id]));
+    std::string lo(std::to_string(longi[id]));
     std::string pose_t ("latitude: " + la + "  longitude: " + lo);
     viewer->updateText(pose_t.c_str(), 25,25,18,0,200,0,"pose_t");
 
@@ -205,8 +266,8 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     if (--id <= 0)
       id = 0;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    std::string la(std::to_string(lati[id]);
-    std::string lo(std::to_string(longi[id]);
+    std::string la(std::to_string(lati[id]));
+    std::string lo(std::to_string(longi[id]));
     std::string pose_t ("latitude: " + la + "  longitude: " + lo);
     viewer->updateText(pose_t.c_str(), 25,25,18,0,200,0,"pose_t");
 /*    viewer->removeShape("viewpoint");
@@ -334,7 +395,7 @@ float poseGrabber::get_turnTable_pos()
 bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
   //put lwr as high as possible to better see table
-  set_lwr_pose(0.9, 60);  
+  set_lwr_pose(0.8, 80);  
 
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -447,31 +508,34 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   RzPi2 = Eigen::AngleAxisf(3.1415962/2, Eigen::Vector3f::UnitZ());
   pcl::transformPointCloud (*cloud_, *cloud_, RzPi2);
   Eigen::Affine3f f = RzPi2 * RaA * trasl * RxPi;
-  Eigen::Matrix4f t = f.matrix(); //save final transformation from camera to table
-  tf::Transform T_c_t (tf::Matrix3x3( t(0,0), t(0,1), t(0,2), 
-                                    t(1,0), t(1,1), t(1,2),
-                                    t(2,0), t(2,1), t(2,2) ),
-                     tf::Vector3 (  t(0,3), t(1,3), t(2,3)));
+  Eigen::Matrix4f t = f.matrix(); 
+  //save final transformation from camera to table in class
+  tf::Transform T_c_t_s (   tf::Matrix3x3( t(0,0), t(0,1), t(0,2), 
+                           t(1,0), t(1,1), t(1,2),
+                           t(2,0), t(2,1), t(2,2) ),
+            tf::Vector3 (  t(0,3), t(1,3), t(2,3) ) );
+  T_c_t = T_c_t_s;
+  tf::StampedTransform T_w_7_s; //from world to lwr_7_link 
+  listen_.lookupTransform("/world", "/lwr_7_link", ros::Time(0), T_w_7_s); //fill it
+  T_w_7 = T_w_7_s; //save it in class
   
-  tf::StampedTransform T_7_t; //from lwr_7_link to rot_table
-  tf::Transform T_7_c; //from lwr_7_link to camera (our calibration)
-  listen_.lookupTransform("/turn_table", "/lwr_7_link", ros::Time(0), T_7_t); //fill it
-  T_7_c = T_c_t.inverseTimes(T_7_t); //return T_c_t inverted and multiplied by T_7_t      T_7_c = (Tct^-1 * T_7_t)
-  
-  //Save transform to disk
+  //Save transforms to disk
   //create directory to store transformation in "HOME/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
     boost::filesystem::create_directory(work_dir_);
   }
   ofstream trans_file;
-  trans_file.open( (work_dir_.string() +  "/T_7_c.transform").c_str() );
-  trans_file << "## Camera Calibration (lwr_7_link to camera) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
+  trans_file.open( (work_dir_.string() +  "/table.transform").c_str() );
+  trans_file << "## Table Transform (camera to table) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
   trans_file << "## <Rotation quaternion xyzw> <new line> <translation> "<<std::endl;
-  trans_file << T_7_c.getRotation().getX() <<" "<< T_7_c.getRotation().getY()<<" "<< T_7_c.getRotation().getZ()<<" "<<  T_7_c.getRotation().getW()<<std::endl; 
-  trans_file << T_7_c.getOrigin()[0] <<" "<< T_7_c.getOrigin()[1] <<" "<< T_7_c.getOrigin()[2] << std::endl; 
+  trans_file <<"Tct: "<< T_c_t.getRotation().getX() <<" "<< T_c_t.getRotation().getY()<<" "<< T_c_t.getRotation().getZ()<<" "<<  T_c_t.getRotation().getW()<<std::endl; 
+  trans_file <<"Tct: "<< T_c_t.getOrigin()[0] <<" "<< T_c_t.getOrigin()[1] <<" "<< T_c_t.getOrigin()[2] << std::endl; 
+  trans_file << "## Camera pose (world to lwr_7_link) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
+  trans_file << "## <Rotation quaternion xyzw> <new line> <translation> "<<std::endl;  
+  trans_file <<"Tw7: "<< T_w_7.getRotation().getX() <<" "<< T_w_7.getRotation().getY()<<" "<< T_w_7.getRotation().getZ()<<" "<<  T_w_7.getRotation().getW()<<std::endl; 
+  trans_file <<"Tw7: "<< T_w_7.getOrigin()[0] <<" "<< T_w_7.getOrigin()[1] <<" "<< T_w_7.getOrigin()[2] << std::endl; 
   trans_file.close();
-
   
   viewer->removeShape("end");
   viewer->setWindowName("Final Table Model");
@@ -484,9 +548,9 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   }
   viewer->spinOnce(100); //one last spin to update viewer
   proceed = false;
-  calibration_=true;
+  calibration_= true;
   ROS_INFO("Calibration complete!!");
-  
+  ROS_INFO("You don't need to run this again, unless you move the table, or the camera with respect to lwr_7_link");  
   return true;
 }
 
@@ -495,9 +559,10 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
 {
   if (!calibration_)
   {
-    ROS_ERROR("Camera is not calibrated!! Run calibration service before trying to acquire poses!");
+    ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
+  //TODO revision for new transforms
   keep_acquiring = true;
   revision = false;
   int lon_pass = req.lon_pass;
