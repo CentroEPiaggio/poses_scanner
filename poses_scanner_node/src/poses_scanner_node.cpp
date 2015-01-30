@@ -16,6 +16,7 @@
 #include <pcl/filters/extract_indices.h>
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/project_inliers.h>
+#include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/ModelCoefficients.h>
 #include <pcl/point_cloud.h>
@@ -80,6 +81,37 @@ class poseGrabber
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
 };
+
+//Class Constructor
+poseGrabber::poseGrabber()
+{
+  nh = ros::NodeHandle("poses_scanner_node");
+  //service callbacks
+  srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
+  srv_table_ = nh.advertiseService("calibrate", &poseGrabber::calibrate, this);
+  //advertise acquired poses
+  pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
+  //publish to lwr controller
+  pub_lwr_ = nh.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
+  pcl::PointCloud<pcl::PointXYZRGBA> a,b;
+  cloud_ = a.makeShared();
+  scene_ = b.makeShared();
+  timestamp_ = boost::posix_time::second_clock::local_time();
+  calibration_ = false;
+  //check if we have already calibrated
+  std::string home ( std::getenv("HOME") );
+  work_dir_ = (home + "/PoseScanner");
+  boost::filesystem::path cal_file  (work_dir_.string() + "/table.transform");
+  if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
+  {
+    calibration_ = true;
+    //TODO review
+  }
+  else
+  {
+    ROS_WARN("[posesScanner] Camera is not calibrated, run calibration service, before trying to acquire poses!");
+  }
+}
 
 //global stuff used by viewer callbacks
 pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_crop_ (new pcl::PointCloud<pcl::PointXYZRGBA>);
@@ -154,6 +186,11 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     if (++id >= poses.size() )
       id=poses.size()-1;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
+    std::string la(std::to_string(lati[id]);
+    std::string lo(std::to_string(longi[id]);
+    std::string pose_t ("latitude: " + la + "  longitude: " + lo);
+    viewer->updateText(pose_t.c_str(), 25,25,18,0,200,0,"pose_t");
+
  /*   viewer->removeShape("viewpoint");
     pcl::PointXYZ a,b;
     a.x=a.y=a.z=0;
@@ -168,6 +205,10 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     if (--id <= 0)
       id = 0;
     viewer->updatePointCloud(poses[id].makeShared(), "pose");
+    std::string la(std::to_string(lati[id]);
+    std::string lo(std::to_string(longi[id]);
+    std::string pose_t ("latitude: " + la + "  longitude: " + lo);
+    viewer->updateText(pose_t.c_str(), 25,25,18,0,200,0,"pose_t");
 /*    viewer->removeShape("viewpoint");
     pcl::PointXYZ a,b;
     a.x=a.y=a.z=0;
@@ -181,6 +222,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
   {
     keep_acquiring = true;
   //  viewer->removeShape("viewpoint");
+    viewer->removeShape("pose_t");
     viewer->removePointCloud("pose");
     viewer->removeCoordinateSystem();
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
@@ -224,35 +266,6 @@ void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* 
   }
 }
 
-//Class Constructor
-poseGrabber::poseGrabber()
-{
-  nh = ros::NodeHandle("poses_scanner_node");
-  //service callbacks
-  srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
-  srv_table_ = nh.advertiseService("calibrate", &poseGrabber::calibrate, this);
-  //advertise acquired poses
-  pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
-  //publish to lwr controller
-  pub_lwr_ = nh.advertise<lwr_controllers::PoseRPY> ("/lwr/OneTaskInverseKinematics/command_configuration",1);
-  pcl::PointCloud<pcl::PointXYZRGBA> a,b;
-  cloud_ = a.makeShared();
-  scene_ = b.makeShared();
-  timestamp_ = boost::posix_time::second_clock::local_time();
-  calibration_ = false;
-  //check if we have already calibrated
-  std::string home ( std::getenv("HOME") );
-  work_dir_ = (home + "/PoseScanner");
-  boost::filesystem::path cal_file  (work_dir_.string() + "/T_7_c.transform");
-  if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
-  {
-    calibration_ = true;
-  }
-  else
-  {
-    ROS_WARN("[posesScanner] Camera is not calibrated, run calibration service, before trying to acquire poses!");
-  }
-}
 
 //wrapper function to grab a cloud
 bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
@@ -290,14 +303,14 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
 {
   lwr_controllers::PoseRPY task;
   
-  //assume centre of table into (-0.6, -0.2, 0.13) in world robot frame
+  //assume centre of table into (-0.6364, -0.21, 0.137) in world robot frame
   task.id = 0;
-  task.position.x = -0.6;
-  task.position.y =  -0.2 + (radius * cos(latitude*D2R));
-  task.position.z = 0.13 + (radius * sin(latitude*D2R)); 
-  task.orientation.roll = 1.57079 + (latitude*D2R); //FIXCONTROL this is pitch (90° parallell to the ground)
-  task.orientation.pitch = 0; //FIXCONTROL this is roll (keeping it a zero)
-  task.orientation.yaw = 0; //FIXCONTROL this is yaw (zero is looking at the window for right arm)
+  task.position.x = -0.6364;
+  task.position.y =  -0.21 + (radius * cos(latitude*D2R));
+  task.position.z = 0.137 + (radius * sin(latitude*D2R)); 
+  task.orientation.roll = 1.57079 + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground)
+  task.orientation.pitch = 0; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
+  task.orientation.yaw = 0; //this is yaw is in world frame! (zero is looking at the window for right arm)
   
   //send the task to the robot
   pub_lwr_.publish(task); 
@@ -430,8 +443,8 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   RaA = Eigen::AngleAxisf(angle,rot_axis);
   //Third Transformation, rotate to align zaxis on table normal
   pcl::transformPointCloud (*cloud_, *cloud_, RaA);
-  //Fourth Transformation, rotate around new z by -pi/2, so that x "points" to the camera
-  RzPi2 = Eigen::AngleAxisf(-3.1415962/2, Eigen::Vector3f::UnitZ());
+  //Fourth Transformation, rotate around new z by +pi/2, so that x "points" to the camera
+  RzPi2 = Eigen::AngleAxisf(3.1415962/2, Eigen::Vector3f::UnitZ());
   pcl::transformPointCloud (*cloud_, *cloud_, RzPi2);
   Eigen::Affine3f f = RzPi2 * RaA * trasl * RxPi;
   Eigen::Matrix4f t = f.matrix(); //save final transformation from camera to table

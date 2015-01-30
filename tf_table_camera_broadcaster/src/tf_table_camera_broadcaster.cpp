@@ -32,7 +32,7 @@ class broadcaster
 broadcaster::broadcaster()
 {
   nh = ros::NodeHandle("tf_table_camera_broadcaster");
-  T_w_t.setOrigin ( Vector3(-0.6, -0.2, 0.13) ); //TODO tweaks
+  T_w_t.setOrigin ( Vector3(-0.6364, -0.21, 0.137) ); //TODO tweaks
   T_w_t.setRotation ( Quaternion(0, 0, 0.707106781, 0.707106781) ); //rotation of pi/2 around z
   //check if we have already calibrated
   std::string home ( std::getenv("HOME") );
