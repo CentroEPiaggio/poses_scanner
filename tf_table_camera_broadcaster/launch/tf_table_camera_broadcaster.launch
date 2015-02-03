@@ -1,6 +1,0 @@
-<launch>
-	
-	<!-- tf table broadcaster  -->
-	<node name="tf_table_camera_broadcaster" pkg="tf_table_camera_broadcaster" type="tf_table_camera_broadcaster" output="screen" />
-
-</launch>
