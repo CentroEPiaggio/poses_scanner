@@ -76,7 +76,7 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    bool calibration_;
+    bool calibration_, flipped_;
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
@@ -100,6 +100,7 @@ poseGrabber::poseGrabber()
   scene_ = b.makeShared();
   timestamp_ = boost::posix_time::second_clock::local_time();
   calibration_ = false;
+  flipped_ = false;
   //check if we have already calibrated
   std::string home ( std::getenv("HOME") );
   work_dir_ = (home + "/PoseScanner");
@@ -113,7 +114,7 @@ poseGrabber::poseGrabber()
     {
       ROS_INFO("[poses_scanner] Found calibration saved on disk");
       calibration_ = true;
-      int tr_type (0);
+      int tr_type (0), row(0);
       while (getline (t_file, line))
       {
         if (line.compare(0,1,"#") == 0)
@@ -127,16 +128,19 @@ poseGrabber::poseGrabber()
           if (line.compare("T60:") == 0)
           {
             tr_type = 1;
+            row = 0;
             continue;
           }
           else if (line.compare("T40:") == 0)
           {
             tr_type = 2;
+            row = 0;
             continue;
           }
           else if (line.compare("T20:") == 0)
           {
             tr_type = 3;
+            row = 0;
             continue;
           }
           std::vector<std::string> vst;
@@ -146,11 +150,29 @@ poseGrabber::poseGrabber()
             if (vst.size() == 4)
             {
               if (tr_type == 1)
-                T_60 << std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]), std::stof(vst[4]) ;
+              {
+                T_60 (row,0) = std::stof(vst[0]);
+                T_60 (row,1) = std::stof(vst[1]);
+                T_60 (row,2) = std::stof(vst[2]);
+                T_60 (row,3) = std::stof(vst[3]);
+                ++row;
+              }
               if (tr_type == 2)
-                T_40 << std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]), std::stof(vst[4]) ;
+              {
+                T_40 (row,0) = std::stof(vst[0]);
+                T_40 (row,1) = std::stof(vst[1]);
+                T_40 (row,2) = std::stof(vst[2]);
+                T_40 (row,3) = std::stof(vst[3]);
+                ++row;
+              }
               if (tr_type == 3)
-                T_20 << std::stof(vst[1]), std::stof(vst[2]), std::stof(vst[3]), std::stof(vst[4]) ;
+              {
+                T_20 (row,0) = std::stof(vst[0]);
+                T_20 (row,1) = std::stof(vst[1]);
+                T_20 (row,2) = std::stof(vst[2]);
+                T_20 (row,3) = std::stof(vst[3]);
+                ++row;
+              }
             }
             else
             {
@@ -449,7 +471,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   //find circle
   pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (cloud_crop_));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
-  ransac.setDistanceThreshold (0.01);
+  ransac.setDistanceThreshold (0.02);
   ransac.setMaxIterations(2000);
   ransac.computeModel();
   Eigen::VectorXf coefficients;
@@ -471,11 +493,11 @@ bool poseGrabber::acquire_table_transform (int latitude)
   ransac.computeModel(); //recompute model and coefficients
   ransac.getModelCoefficients(coefficients);
   Eigen::Vector3f normal (coefficients[4], coefficients[5], coefficients[6]);
-  /*if (normal[2] < 0)
+  if (normal[2] < 0)
   {
     normal *= -1; //sometimes the normal gets under the table (unpredicatably)
     std::cout<<"Flipped Table Normal\n";
-  }*/
+  }
   //get rotation from old z axis to new z (table normal) 
   Eigen::Vector3f zaxis (0,0,1);
   Eigen::Vector3f rot_axis;
@@ -503,7 +525,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str() );
     trans_file << "## Table Transforms (camera to table) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
     trans_file << "## <Matrix4f> "<<std::endl;
-    trans_file <<"T60:\n"<< T_60; 
+    trans_file <<"T60:\n"<< T_60 <<std::endl; 
     trans_file.close();
   }
   else if (latitude == 40)
@@ -512,7 +534,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
     //Save transform to disk
     fstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
-    trans_file <<"T40:\n"<< T_40; 
+    trans_file <<"T40:\n"<< T_40 <<std::endl; 
     trans_file.close();
   }
   else if (latitude == 20)
@@ -563,16 +585,16 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
       }
     }
   }
-  boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (12000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   bool cal60(false), cal40(false), cal20(false);
   cal60 = acquire_table_transform(60);
   //put lwr at second stop
   set_lwr_pose(0.9, 40);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (6000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (12000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal40 = acquire_table_transform(40);
   //last stop
   set_lwr_pose(0.9, 20);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (6000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal20 = acquire_table_transform(20);
   if (cal60 && cal40 && cal20)
   {
@@ -599,7 +621,15 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   keep_acquiring = true;
   revision = false;
   int lon_pass = req.lon_pass;
-  std::string name = req.objname; //TODO add check for reversed object
+  std::string name;
+  if (req.objname.compare(0,1,"-") == 0) //check if we wanted flipped object
+  {
+    flipped_ = true;
+    name = req.objname.substr(1); //get all name except first character
+    //TODO still need to implement this... if it is doable
+  }
+  else
+    name = req.objname; 
   //create directory to store poses writes into "~/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
@@ -645,7 +675,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
           }
         }
       }
-      boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for it    TODO remove and add topic
+      boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for it    TODO remove and add topic
       for (int lon=0; lon<360; lon+=lon_pass)
       {//for cycle in longitude
         cloud_->clear();
@@ -677,20 +707,21 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         {
           pcl::transformPointCloud (*acquired, *cloud_, T_20);
         }
+
         //rotate back of how the table has rotated
         Eigen::Affine3f lon_tran; 
         lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitZ());  
         pcl::transformPointCloud(*cloud_, *scene_, lon_tran); //also saves a copy of scene in memory
         
         //save scene on disk
-        std::string scenename (current_session_.string() + "/" + name + "_Scene_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+        std::string scenename (current_session_.string() + "/SCENE_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
         writer.writeBinaryCompressed (scenename.c_str(), *scene_);
         
         //Cropping z
         pcl::PassThrough<pcl::PointXYZRGBA> pt;
         pt.setInputCloud (scene_);
         pt.setFilterFieldName ("z");
-        pt.setFilterLimits (+0.001, 0.5);
+        pt.setFilterLimits (+0.003, 0.5);
         pt.filter (*acquired);
         //x
         pt.setInputCloud (acquired);
@@ -708,7 +739,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
         radf.setInputCloud(acquired);
         radf.setRadiusSearch(0.005);
-        radf.setMinNeighborsInRadius(3);
+        radf.setMinNeighborsInRadius(5);
         radf.filter(*tmp);
 
 /* no plane segmentation
@@ -731,7 +762,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         std::vector<pcl::PointIndices> cluster_indices;
         pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
         ec.setClusterTolerance (0.008);    
-        ec.setMinClusterSize (100);
+        ec.setMinClusterSize (200);
         ec.setMaxClusterSize (cloud_->points.size());
         ec.setInputCloud (tmp);
         ec.extract (cluster_indices);
