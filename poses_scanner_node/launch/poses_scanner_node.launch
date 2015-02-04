@@ -19,7 +19,9 @@
   </include>
   
   <!-- Launch scene acquirer -->
-  <include file="$(find scene_acquirer_node)/launch/scene_acquirer_node.launch" />
+  <include file="$(find scene_acquirer_node)/launch/scene_acquirer_node.launch">
+    <arg name="launch_openni" value="false" />
+  </include>
   
   <!-- Launch turn table interface -->
   <!-- If you see node panic, give 777 permission to usb: sudo chmod 777 /dev/ttyUSB0 -->
