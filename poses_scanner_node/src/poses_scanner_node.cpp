@@ -106,6 +106,7 @@ poseGrabber::poseGrabber()
   work_dir_ = (home + "/PoseScanner");
   current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
   boost::filesystem::path cal_file  (work_dir_.string() + "/table.transform");
+/*
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
     std::ifstream t_file (cal_file.string().c_str());
@@ -192,6 +193,7 @@ poseGrabber::poseGrabber()
   }
   else
     ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
+  */
 }
 
 //global stuff used by viewer callbacks
@@ -424,18 +426,16 @@ bool poseGrabber::acquire_table_transform (int latitude)
   selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
 
   //First transofrmation, rotation by Pi around x (camera link frame) express it in eigen for pcl 
-  Eigen::Affine3f RxPi;
+  /*Eigen::Affine3f RxPi;
   RxPi = Eigen::AngleAxisf(3.1415962, Eigen::Vector3f::UnitX() );
-
+*/
   //wait for a cloud from sensor
-  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired (new pcl::PointCloud<pcl::PointXYZRGBA>);
-
-  if (! acquire_scene(acquired) )
+  if (! acquire_scene(cloud_) )
   {
     ROS_ERROR("[posesScanner] Cannot acquire a scene!");
     return false;
   }
-  pcl::transformPointCloud (*acquired, *cloud_, RxPi);
+  //pcl::transformPointCloud (*acquired, *cloud_, RxPi);
   pcl::copyPointCloud(*cloud_,*cloud_original_); //save a copy before cropping
   pcl::copyPointCloud (*cloud_, *cloud_crop_); //save cloud for callbacks so it can get cropped
   
@@ -452,12 +452,13 @@ bool poseGrabber::acquire_table_transform (int latitude)
   viewer->spinOnce(100); //one last spin to update viewer
   proceed = false;
   //plane segmentation
+  /*
   pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
   pcl::ModelCoefficients::Ptr coeffs (new pcl::ModelCoefficients);
   pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.015);
+  seg.setDistanceThreshold (0.02);
   seg.setInputCloud(cloud_crop_);
   seg.segment (*table_inliers, *coeffs);
   //project points
@@ -468,6 +469,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   proj.setCopyAllData(true);
   proj.setModelCoefficients (coeffs);
   proj.filter (*cloud_crop_);
+  */
   //find circle
   pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (cloud_crop_));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
@@ -486,13 +488,8 @@ bool poseGrabber::acquire_table_transform (int latitude)
    * [6] z coordinate of normal direction
    */
 
-  Eigen::Affine3f trasl, RaA, RzPi2;
-  trasl = Eigen::Translation3f(-centre);
-  // Second Transformation, transalte into table center
-  pcl::transformPointCloud (*cloud_crop_, *cloud_, trasl);
-  ransac.computeModel(); //recompute model and coefficients
-  ransac.getModelCoefficients(coefficients);
-  Eigen::Vector3f normal (coefficients[4], coefficients[5], coefficients[6]);
+  Eigen::Matrix4f T_wl; //transform from world(camera frame) to local table reference system
+  Eigen::Vector3f normal (coefficients[4], coefficients[5], coefficients[6]); //the table normal
   if (normal[2] < 0)
   {
     normal *= -1; //sometimes the normal gets under the table (unpredicatably)
