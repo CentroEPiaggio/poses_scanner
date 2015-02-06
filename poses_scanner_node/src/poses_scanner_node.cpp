@@ -237,8 +237,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     pass.setFilterFieldName ("x");
     pass.setFilterLimits (selection.xmin, selection.xmax);
     pass.filter (*cloud_crop_);
-    viewer->removeShape("Scene");
-    viewer->addPointCloud(cloud_crop_, "Cropped");
+    viewer->updatePointCloud(cloud_crop_, "Scene");
     cropped = true;
     viewer->updateText("If unsatisfied press 'r' to reset, otherwise press 't' to proceed.", 25,25,18,0,200,0,"info1");
   }
@@ -252,7 +251,6 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     viewer->removeShape("cube");
     viewer->removeShape("info");
     viewer->removePointCloud("final");
-    viewer->removePointCloud("Cropped");
     viewer->removePointCloud("Scene");
     viewer->removeCoordinateSystem();
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
@@ -260,9 +258,8 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
   if (event.getKeySym () == "r" && event.keyDown () && cropped == true && revision ==false)
   {
     cropped = false;
-    viewer->removeShape("Cropped");
     viewer->updateText("Hold 'Shift' and 'Leftclick' the centre of the table.\n When satisfied with the region selection, press 'c'", 25,25,18,0,200,0,"info1");
-    viewer->addPointCloud(cloud_original_, "Scene");
+    viewer->updatePointCloud(cloud_original_, "Scene");
     selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
   }
   if (event.getKeySym () == "n" && event.keyDown () && revision==true )
@@ -450,13 +447,13 @@ bool poseGrabber::acquire_table_transform (int latitude)
   viewer->spinOnce(100); //one last spin to update viewer
   proceed = false;
   //plane segmentation
-  /*
+ /*
   pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
   pcl::ModelCoefficients::Ptr coeffs (new pcl::ModelCoefficients);
   pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.02);
+  seg.setDistanceThreshold (0.025);
   seg.setInputCloud(cloud_crop_);
   seg.segment (*table_inliers, *coeffs);
   //project points
@@ -471,7 +468,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   //find circle
   pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (cloud_crop_));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
-  ransac.setDistanceThreshold (0.02);
+  ransac.setDistanceThreshold (0.003);
   ransac.setMaxIterations(2000);
   ransac.computeModel();
   Eigen::VectorXf coefficients;
@@ -495,15 +492,19 @@ bool poseGrabber::acquire_table_transform (int latitude)
     ROS_INFO("Flipped Table Normal");
   }
   //get rotation from old z axis to new z (table normal) 
-  Eigen::Vector3f zaxis (0,0,1);
   Eigen::Vector3f rot_axis; //identify an axis of rotation
-  rot_axis = normal.cross(zaxis);
+  rot_axis = normal.cross(Eigen::Vector3f::UnitZ());
   Eigen::Matrix3f RaA;
   rot_axis.normalize();
-  double angle = acos (normal.dot(zaxis)); //in radians
+  double angle = acos (normal.dot(Eigen::Vector3f::UnitZ())); //in radians
   //get the rotation matrix from axis angle
   RaA = Eigen::AngleAxisf(angle,rot_axis);
-  T_wl0 << RaA, centre[0], centre[1], centre[2], 0, 0, 0, 1;
+  Eigen::Vector3f trasl;
+  trasl = RaA*(-centre);
+  T_wl0 <<  RaA(0,0), RaA(0,1), RaA(0,2), trasl[0], 
+            RaA(1,0), RaA(1,1), RaA(1,2), trasl[1], 
+            RaA(2,0), RaA(2,1), RaA(2,2), trasl[2], 
+            0,        0,        0,        1;
   //create directory to store transformation in "HOME/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
@@ -609,11 +610,13 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
 //service callback to acquire poses
 bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_scanner_node::acquire::Response &res)
 {
+  /*
   if (!calibration_)
   {
     ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
+  */
   keep_acquiring = true;
   revision = false;
   int lon_pass = req.lon_pass;
@@ -702,7 +705,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         pcl::PassThrough<pcl::PointXYZRGBA> pt;
         pt.setInputCloud (temp);
         pt.setFilterFieldName ("z");
-        pt.setFilterLimits (+0.005, 0.5);
+        pt.setFilterLimits (+0.01, 0.5);
         pt.filter (*temp);
         //x
         pt.setInputCloud (temp);
@@ -718,8 +721,8 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         //Radius outlier removal (if a point has not at least 2 neighbors in 5mm radius it is considered as an outlier, thus removed)
         pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
         radf.setInputCloud(temp);
-        radf.setRadiusSearch(0.005);
-        radf.setMinNeighborsInRadius(5);
+        radf.setRadiusSearch(0.009);
+        radf.setMinNeighborsInRadius(10);
         radf.filter(*temp);
         //now transform back to camera frame
         Eigen::Matrix4f T_inverse = T_60.inverse();
