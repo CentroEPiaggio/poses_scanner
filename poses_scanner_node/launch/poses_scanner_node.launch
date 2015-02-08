@@ -21,6 +21,7 @@
   <!-- Launch scene acquirer -->
   <include file="$(find scene_acquirer_node)/launch/scene_acquirer_node.launch">
     <arg name="launch_openni" value="false" />
+    <rosparam command='load' file='$(find scene_acquirer_node)/config/params_pose_scanner.yaml' />
   </include>
   
   <!-- Launch turn table interface -->
