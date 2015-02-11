@@ -1,7 +1,9 @@
 filter: true
-xmin: -0.7
-xmax: 0.7
-ymin: -0.7
-ymax: 0.8
-zmin: -1
-zmax: -0.3
+xmin: -0.078
+xmax: 0.35
+ymin: -0.2
+ymax: 0.3
+zmin: 0.3
+zmax: 1
+downsample: false
+leaf_s: 0.005

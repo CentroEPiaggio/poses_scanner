@@ -10,6 +10,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/filters/passthrough.h>
+#include <pcl/filters/voxel_grid.h>
 // ROS generated headers
 #include "scene_acquirer_node/acquire_scene.h" 
 
@@ -43,8 +44,8 @@ class sceneAcquirer
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_stream_;
 
     //parameters
-    bool filter_;
-    double xmin,xmax,ymin,ymax,zmin,zmax;
+    bool filter_, downsample_;
+    double xmin,xmax,ymin,ymax,zmin,zmax,leaf_;
 };
 
 //Constructor
@@ -64,56 +65,69 @@ sceneAcquirer::sceneAcquirer()
   pub_stream_ = nh_.advertise<sensor_msgs::PointCloud2> ("/scene_acquirer/scene",1);
 
   //load parameters
-  nh_.param<bool>("filter", filter_, "false");
-  nh_.param<double>("xmin", xmin, -100);
-  nh_.param<double>("xmax", xmax, 100);
-  nh_.param<double>("ymin", ymin, -100);
-  nh_.param<double>("ymax", ymax, 100);
-  nh_.param<double>("zmin", zmin, -100);
-  nh_.param<double>("zmax", zmax, 100);
+  nh_.param<bool>("/filter", filter_, "false");
+  nh_.param<bool>("/downsample", downsample_, "false");
+  nh_.param<double>("/xmin", xmin, -100);
+  nh_.param<double>("/xmax", xmax, 100);
+  nh_.param<double>("/ymin", ymin, -100);
+  nh_.param<double>("/ymax", ymax, 100);
+  nh_.param<double>("/zmin", zmin, -100);
+  nh_.param<double>("/zmax", zmax, 100);
+  nh_.param<double>("/leaf_s", leaf_, 0.005);
 }
 
 void sceneAcquirer::new_cloud_in_stream(const sensor_msgs::PointCloud2::ConstPtr& message)
 {
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   //constantly copy cloud from stream into class scene_stream_ to be accessible for service callback
-  pcl::fromROSMsg (*message, *scene_stream_);
+  pcl::fromROSMsg (*message, *tmp);
 
   //check if we need to filter stream
-  nh_.getParam("filter", filter_);
+  nh_.getParam("/filter", filter_);
   if (filter_)
   {
-    nh_.getParam("xmin", xmin);
-    nh_.getParam("xmax", xmax);
-    nh_.getParam("ymin", ymin);
-    nh_.getParam("zmin", zmin);
-    nh_.getParam("ymax", ymax);
-    nh_.getParam("zmax", zmax);
+    nh_.getParam("/xmin", xmin);
+    nh_.getParam("/xmax", xmax);
+    nh_.getParam("/ymin", ymin);
+    nh_.getParam("/zmin", zmin);
+    nh_.getParam("/ymax", ymax);
+    nh_.getParam("/zmax", zmax);
     pcl::PassThrough<pcl::PointXYZRGBA> pass;
-    pass.setInputCloud (scene_stream_);
-    
+    pass.setInputCloud (tmp);
     pass.setFilterFieldName ("z");
     pass.setFilterLimits (zmin, zmax);
-    pass.filter (*scene_stream_);
-    
-    pass.setInputCloud (scene_stream_);
+    pass.filter (*tmp);
+    pass.setInputCloud (tmp);
     pass.setFilterFieldName ("y");
     pass.setFilterLimits (ymin, ymax);
-    pass.filter (*scene_stream_);
-    
-    pass.setInputCloud (scene_stream_);
+    pass.filter (*tmp);
+    pass.setInputCloud (tmp);
     pass.setFilterFieldName ("x");
     pass.setFilterLimits (xmin, xmax);
     pass.filter (*scene_stream_);
-
+    pcl::copyPointCloud(*scene_stream_ , *tmp);
+  }
+  //check if we need to downsample stream
+  nh_.getParam("/downsample", downsample_);
+  if (downsample_)
+  {
+    nh_.getParam("/leaf_s", leaf_);
+    pcl::VoxelGrid<pcl::PointXYZRGBA> vg;
+    vg.setInputCloud (tmp);
+    vg.setLeafSize(leaf_, leaf_, leaf_);
+    vg.filter (*scene_stream_);
+    pcl::copyPointCloud(*scene_stream_ , *tmp);
+  }
+  if (filter_ || downsample_)
+  {
     sensor_msgs::PointCloud2 msg;
-    pcl::toROSMsg (*scene_stream_, msg);
+    pcl::toROSMsg (*tmp, msg);
     pub_stream_.publish( msg ); //republish the modified scene
   }
   else
   {
     pub_stream_.publish( *message ); //or republish the same scene
   }
-  
 }
 
 bool sceneAcquirer::acquireScene (scene_acquirer_node::acquire_scene::Request& req, scene_acquirer_node::acquire_scene::Response& res)

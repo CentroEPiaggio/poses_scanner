@@ -14,6 +14,7 @@
 #include <pcl/filters/passthrough.h>
 #include <pcl/filters/project_inliers.h>
 #include <pcl/filters/radius_outlier_removal.h>
+#include <pcl/filters/voxel_grid.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/ModelCoefficients.h>
 #include <pcl/point_cloud.h>
@@ -76,12 +77,12 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    bool calibration_, flipped_;
+    bool calibration_;
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
 
-    Eigen::Matrix4f T_60, T_40, T_20; //transforms from camera to table
+    Eigen::Matrix4d T_70, T_50, T_30; //transforms from camera to table
 };
 
 //Class Constructor
@@ -100,13 +101,11 @@ poseGrabber::poseGrabber()
   scene_ = b.makeShared();
   timestamp_ = boost::posix_time::second_clock::local_time();
   calibration_ = false;
-  flipped_ = false;
   //check if we have already calibrated
   std::string home ( std::getenv("HOME") );
   work_dir_ = (home + "/PoseScanner");
   current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
   boost::filesystem::path cal_file  (work_dir_.string() + "/table.transform");
-/*
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
     std::ifstream t_file (cal_file.string().c_str());
@@ -126,19 +125,19 @@ poseGrabber::poseGrabber()
         else
         {
           boost::trim (line); //remove white spaces from start and end
-          if (line.compare("T60:") == 0)
+          if (line.compare("T70:") == 0)
           {
             tr_type = 1;
             row = 0;
             continue;
           }
-          else if (line.compare("T40:") == 0)
+          else if (line.compare("T50:") == 0)
           {
             tr_type = 2;
             row = 0;
             continue;
           }
-          else if (line.compare("T20:") == 0)
+          else if (line.compare("T30:") == 0)
           {
             tr_type = 3;
             row = 0;
@@ -152,26 +151,26 @@ poseGrabber::poseGrabber()
             {
               if (tr_type == 1)
               {
-                T_60 (row,0) = std::stof(vst[0]);
-                T_60 (row,1) = std::stof(vst[1]);
-                T_60 (row,2) = std::stof(vst[2]);
-                T_60 (row,3) = std::stof(vst[3]);
+                T_70 (row,0) = std::stof(vst[0]);
+                T_70 (row,1) = std::stof(vst[1]);
+                T_70 (row,2) = std::stof(vst[2]);
+                T_70 (row,3) = std::stof(vst[3]);
                 ++row;
               }
               if (tr_type == 2)
               {
-                T_40 (row,0) = std::stof(vst[0]);
-                T_40 (row,1) = std::stof(vst[1]);
-                T_40 (row,2) = std::stof(vst[2]);
-                T_40 (row,3) = std::stof(vst[3]);
+                T_50 (row,0) = std::stof(vst[0]);
+                T_50 (row,1) = std::stof(vst[1]);
+                T_50 (row,2) = std::stof(vst[2]);
+                T_50 (row,3) = std::stof(vst[3]);
                 ++row;
               }
               if (tr_type == 3)
               {
-                T_20 (row,0) = std::stof(vst[0]);
-                T_20 (row,1) = std::stof(vst[1]);
-                T_20 (row,2) = std::stof(vst[2]);
-                T_20 (row,3) = std::stof(vst[3]);
+                T_30 (row,0) = std::stof(vst[0]);
+                T_30 (row,1) = std::stof(vst[1]);
+                T_30 (row,2) = std::stof(vst[2]);
+                T_30 (row,3) = std::stof(vst[3]);
                 ++row;
               }
             }
@@ -193,162 +192,7 @@ poseGrabber::poseGrabber()
   }
   else
     ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
-  */
 }
-
-//global stuff used by viewer callbacks
-pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_crop_ (new pcl::PointCloud<pcl::PointXYZRGBA>);
-pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_original_ (new pcl::PointCloud<pcl::PointXYZRGBA>);
-boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer (new pcl::visualization::PCLVisualizer () );
-bool cropped(false);
-bool revision(false);
-bool proceed(false);
-Eigen::Vector3f centre;
-struct selection_cube
-{
-  float xmin, xmax;
-  float ymin, ymax;
-  float zmin, zmax;
-} selection;
-std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > poses;
-int id(0);
-bool keep_acquiring(true);
-std::vector<int> lati;
-std::vector<int> longi;
-
-//viewer callbacks (keyboard)
-void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
-{
-  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
-  if (event.getKeySym () == "c" && event.keyDown () && selection.zmin != 0 && cropped == false && revision == false)
-  {
-    pcl::PassThrough<pcl::PointXYZRGBA> pass;
-    pass.setInputCloud (cloud_crop_);
-    pass.setFilterFieldName ("z");
-    pass.setFilterLimits (selection.zmin, selection.zmax);
-    pass.filter (*cloud_crop_);
-    
-    pass.setInputCloud (cloud_crop_);
-    pass.setFilterFieldName ("y");
-    pass.setFilterLimits (selection.ymin, selection.ymax);
-    pass.filter (*cloud_crop_);
-
-    pass.setInputCloud (cloud_crop_);
-    pass.setFilterFieldName ("x");
-    pass.setFilterLimits (selection.xmin, selection.xmax);
-    pass.filter (*cloud_crop_);
-    viewer->updatePointCloud(cloud_crop_, "Scene");
-    cropped = true;
-    viewer->updateText("If unsatisfied press 'r' to reset, otherwise press 't' to proceed.", 25,25,18,0,200,0,"info1");
-  }
-  if (event.getKeySym () == "t" && event.keyDown () )
-  {
-    proceed=true;
-//    viewer->removeShape("viewpoint");
-    viewer->removePointCloud("pose");
-    viewer->removeShape("info1");
-    viewer->removeShape("pose_t");
-    viewer->removeShape("cube");
-    viewer->removeShape("info");
-    viewer->removePointCloud("final");
-    viewer->removePointCloud("Scene");
-    viewer->removeCoordinateSystem();
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
-  }
-  if (event.getKeySym () == "r" && event.keyDown () && cropped == true && revision ==false)
-  {
-    cropped = false;
-    viewer->updateText("Hold 'Shift' and 'Leftclick' the centre of the table.\n When satisfied with the region selection, press 'c'", 25,25,18,0,200,0,"info1");
-    viewer->updatePointCloud(cloud_original_, "Scene");
-    selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
-  }
-  if (event.getKeySym () == "n" && event.keyDown () && revision==true )
-  {
-    if (++id >= poses.size() )
-      id=poses.size()-1;
-    viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    viewer->addCoordinateSystem(0.2);
-    std::string la(std::to_string(lati[id]));
-    std::string lo(std::to_string(longi[id]));
-    std::string pose_t ("latitude: " + la + "  longitude: " + lo);
-    viewer->updateText(pose_t.c_str(), 25,95,18,0,50,200,"pose_t");
-
- /*   viewer->removeShape("viewpoint");
-    pcl::PointXYZ a,b;
-    a.x=a.y=a.z=0;
-    b.y= 0.5 * sin(lati[id]*D2R);
-    b.z= 0.5 * cos(lati[id]*D2R)*cos(longi[id]*D2R);
-    b.x= 0.5 * cos(lati[id]*D2R)*sin(longi[id]*D2R);
-    viewer->addLine(a,b,0,1,1,"viewpoint");
-    */
-  }
-  if (event.getKeySym () == "p" && event.keyDown () && revision ==true)
-  {
-    if (--id <= 0)
-      id = 0;
-    viewer->updatePointCloud(poses[id].makeShared(), "pose");
-    viewer->addCoordinateSystem(0.2);
-    std::string la(std::to_string(lati[id]));
-    std::string lo(std::to_string(longi[id]));
-    std::string pose_t ("latitude: " + la + "  longitude: " + lo);
-    viewer->updateText(pose_t.c_str(), 25,95,18,0,50,200,"pose_t");
-/*    viewer->removeShape("viewpoint");
-    pcl::PointXYZ a,b;
-    a.x=a.y=a.z=0;
-    b.y= 0.5 * sin(lati[id]*D2R);
-    b.z= 0.5 * cos(lati[id]*D2R)*cos(longi[id]*D2R);
-    b.x= 0.5 * cos(lati[id]*D2R)*sin(longi[id]*D2R);
-    viewer->addLine(a,b,0,1,1,"viewpoint");
-    */
-  }
-  if (event.getKeySym () == "r" && event.keyDown () && revision ==true)
-  {
-    keep_acquiring = true;
-  //  viewer->removeShape("viewpoint");
-    viewer->removeShape("pose_t");
-    viewer->removePointCloud("pose");
-    viewer->removeCoordinateSystem();
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
-    proceed = true;
-  }
-}
-
-//pick (shift+clik to activate)
-void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer_void)
-{
-  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
-  if (cropped || revision)
-    return;
-  viewer->removeShape("cube"); 
-  event.getPoint (centre[0], centre[1], centre[2]);
-  selection.xmin = centre[0] - 0.2;
-  selection.xmax = centre[0] + 0.2;
-  selection.ymin = centre[1] - 0.2;
-  selection.ymax = centre[1] + 0.2;
-  selection.zmin = centre[2] - 0.2;
-  selection.zmax = centre[2] + 0.2;
-  viewer->addCube ( selection.xmin, selection.xmax, selection.ymin, selection.ymax, selection.zmin, selection.zmax, 0, 0.9,0.2,"cube");  
-}
-
-//Area picking (x to activate)
-void AreaSelectEvent (const  pcl::visualization::AreaPickingEvent &event, void* viewer_void)
-{
-  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);
-  boost::shared_ptr<std::vector<int> > selected (new std::vector<int>);
-  if (event.getPointsIndices	(	*selected ) && revision == true)	
-  {
-    //viewer->removePointCloud("cloud");
-    pcl::PointCloud<pcl::PointXYZRGBA> temp;
-    pcl::ExtractIndices<pcl::PointXYZRGBA> fil (true);
-    fil.setInputCloud (poses[id].makeShared());
-    fil.setIndices (selected);
-    fil.setNegative (true);
-    fil.filter (temp);
-    copyPointCloud(temp, poses[id]);
-    viewer->updatePointCloud(poses[id].makeShared(), "pose");
-  }
-}
-
 
 //wrapper function to grab a cloud
 bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
@@ -388,8 +232,8 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
   
   //measure centre of the table in world robot frame
   task.id = 0;
-  task.position.x = -0.61;
-  task.position.y =  -0.14 + (radius * cos(latitude*D2R));
+  task.position.x = -0.62;
+  task.position.y =  0 + (radius * cos(latitude*D2R));
   task.position.z = 0.137 + (radius * sin(latitude*D2R)); 
   task.orientation.roll = 1.57079 + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground)
   task.orientation.pitch = 0; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
@@ -415,128 +259,183 @@ float poseGrabber::get_turnTable_pos()
 
 bool poseGrabber::acquire_table_transform (int latitude)
 {
-  
-  cropped = false;
-  centre.setZero();
-  selection.xmin= selection.xmax= selection.ymin= selection.ymax= selection.zmax= selection.zmin = 0;
-
-  //First transofrmation, rotation by Pi around x (camera link frame) express it in eigen for pcl 
-  /*Eigen::Affine3f RxPi;
-  RxPi = Eigen::AngleAxisf(3.1415962, Eigen::Vector3f::UnitX() );
-*/
   //wait for a cloud from sensor
   if (! acquire_scene(cloud_) )
   {
     ROS_ERROR("[posesScanner] Cannot acquire a scene!");
     return false;
   }
-  //pcl::transformPointCloud (*acquired, *cloud_, RxPi);
-  pcl::copyPointCloud(*cloud_,*cloud_original_); //save a copy before cropping
-  pcl::copyPointCloud (*cloud_, *cloud_crop_); //save cloud for callbacks so it can get cropped
-  
-  viewer->removeShape("end");
-  viewer->addPointCloud(cloud_, "Scene");
-  viewer->setWindowName("Table Scene");
-  viewer->addCoordinateSystem(0.2);
-  viewer->addText("Hold 'Shift' and 'Leftclick' the centre of the table.\n When satisfied with the region selection, press 'c'", 25,25,18,0,200,0,"info1");
-  //wait user to toy with viewer
-  while (!proceed)
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  pcl::copyPointCloud(*cloud_, *tmp);
+  pcl::visualization::PCLVisualizer viewer3;
+  viewer3.addPointCloud(tmp, "tmp2");
+  viewer3.addCoordinateSystem(0.2);
+  while (!viewer3.wasStopped())
   {
-    viewer->spinOnce (100);
+    viewer3.spinOnce (100);
   }
-  viewer->spinOnce(100); //one last spin to update viewer
-  proceed = false;
-  //plane segmentation
- /*
-  pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
-  pcl::ModelCoefficients::Ptr coeffs (new pcl::ModelCoefficients);
+  //find plane
   pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
+  pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
+  pcl::ModelCoefficients::Ptr coeff (new pcl::ModelCoefficients);
+  seg.setOptimizeCoefficients (true);
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
-  seg.setDistanceThreshold (0.025);
-  seg.setInputCloud(cloud_crop_);
-  seg.segment (*table_inliers, *coeffs);
-  //project points
+  seg.setMaxIterations (2000);
+  seg.setDistanceThreshold (0.04);
+  seg.setInputCloud(tmp);
+  seg.segment(*inliers, *coeff);
+  //extract plane and whats on top
+  pcl::ExtractIndices<pcl::PointXYZRGBA> extract;
+  extract.setInputCloud(tmp);
+  extract.setNegative(true);
+  extract.setIndices(inliers);
+  extract.filter(*tmp);
+  
+  pcl::SACSegmentation<pcl::PointXYZRGBA> segc;
+  pcl::PointIndices::Ptr in (new pcl::PointIndices);
+  pcl::ModelCoefficients::Ptr coe (new pcl::ModelCoefficients);
+  segc.setOptimizeCoefficients (true);
+  segc.setModelType (pcl::SACMODEL_PLANE);
+  segc.setMethodType (pcl::SAC_RANSAC);
+  segc.setMaxIterations (2000);
+  segc.setDistanceThreshold (0.02);
+  segc.setInputCloud(tmp);
+  segc.segment(*in, *coe);
   pcl::ProjectInliers<pcl::PointXYZRGBA> proj;
   proj.setModelType (pcl::SACMODEL_PLANE);
-  proj.setIndices (table_inliers);
-  proj.setInputCloud (cloud_crop_);
-  proj.setCopyAllData(true);
-  proj.setModelCoefficients (coeffs);
-  proj.filter (*cloud_crop_);
+  proj.setModelCoefficients (coe);
+  proj.setInputCloud(tmp);
+  proj.filter(*tmp);
+  //downsample
+  /*
+  pcl::VoxelGrid<pcl::PointXYZRGBA> vg;
+  vg.setInputCloud (tmp);
+  vg.setLeafSize(0.008, 0.008, 0.008);
+  vg.setDownsampleAllData(true);
+  vg.filter (*tmp);
   */
-  //find circle
-  pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (cloud_crop_));
+  pcl::visualization::PCLVisualizer viewer2;
+  viewer2.addPointCloud(tmp, "tmp");
+  viewer2.addCoordinateSystem(0.2);
+  while (!viewer2.wasStopped())
+  {
+    viewer2.spinOnce (100);
+  }
+  /*
+  pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (tmp));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
-  ransac.setDistanceThreshold (0.003);
+  ransac.setDistanceThreshold (0.08);
   ransac.setMaxIterations(2000);
   ransac.computeModel();
   Eigen::VectorXf coefficients;
   ransac.getModelCoefficients(coefficients);  
-  /* Coefficients of model are:
-   * [0] x coordinate of centre
-   * [1] y coordinate of centre
-   * [2] z coordinate of centre
-   * [3] circle's radius
-   * [4] x coordinate of normal direction
-   * [5] y coordinate of normal direction
-   * [6] z coordinate of normal direction
-   */
-
-  Eigen::Matrix4f T_wl0; //transform from world(camera frame) to local table reference system at zero angle
-  Eigen::Vector3f normal (coefficients[4], coefficients[5], coefficients[6]); //the table normal
-  Eigen::Vector3f vp (0 - centre[0], 0 - centre[1], 0 -centre[2]); //viewpoint vector 0 (sensor origin) - table centre
-  if (vp.dot (normal) < 0 ) //reorient the normal if needed
+  */
+  //compute another plane model to read its normal
+  pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA>::Ptr table_model (new pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA> (tmp));
+  pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
+  ransac.setDistanceThreshold (0.01);
+  ransac.setMaxIterations(2000);
+  ransac.computeModel();
+  Eigen::VectorXf coefficients;
+  ransac.getModelCoefficients(coefficients);  
+  double cx(0),cy(0),cz(0); //centroid of table
+  for (int i=0; i< tmp->points.size(); ++i)
   {
-    normal *= -1; 
+    cx += tmp->points[i].x;
+    cy += tmp->points[i].y;
+    cz += tmp->points[i].z;
+  }
+  cx /= tmp->points.size();
+  cy /= tmp->points.size();
+  cz /= tmp->points.size();
+  /* Coefficients of model are:
+   * [0] x coordinate of normal direction
+   * [1] y coordinate of normal direction
+   * [2] z coordinate of normal direction
+   * [3] d  of equation ax+by+cz+d=0
+   */
+  double nx,ny,nz;
+  nx = (double)coeff->values[0];
+  ny = (double)coeff->values[1];
+  nz = (double)coeff->values[2];
+  
+  Eigen::Vector3d new_z (nx,ny,nz); //the table normal
+  Eigen::Vector3d vp (0 - cx, 0 - cy, 0 - cz); //viewpoint vector 0 (sensor origin) - table centre. It points "up" the table
+  vp.normalize();
+  new_z.normalize();
+  if (vp.dot (new_z) < 0 ) //reorient the normal if needed
+  {
+    new_z *= -1; 
     ROS_INFO("Flipped Table Normal");
   }
-  //get rotation from old z axis to new z (table normal) 
-  Eigen::Vector3f rot_axis; //identify an axis of rotation
-  rot_axis = normal.cross(Eigen::Vector3f::UnitZ());
-  Eigen::Matrix3f RaA;
-  rot_axis.normalize();
-  double angle = acos (normal.dot(Eigen::Vector3f::UnitZ())); //in radians
-  //get the rotation matrix from axis angle
-  RaA = Eigen::AngleAxisf(angle,rot_axis);
-  Eigen::Vector3f trasl;
-  trasl = RaA*(-centre);
-  T_wl0 <<  RaA(0,0), RaA(0,1), RaA(0,2), trasl[0], 
-            RaA(1,0), RaA(1,1), RaA(1,2), trasl[1], 
-            RaA(2,0), RaA(2,1), RaA(2,2), trasl[2], 
-            0,        0,        0,        1;
+  //check if new_z^t dot x is zero, if it is x lays on the table
+  double precision = 1e-4;
+  double result = (new_z.transpose() * Eigen::Vector3d::UnitX()); 
+  Eigen::Matrix3d R_kt;
+  if ( result > -precision && result < precision )
+  {
+    //we can use the actual x axis, cause it lays on the table
+    Eigen::Vector3d new_y = new_z.cross(Eigen::Vector3d::UnitX());
+    new_y.normalize();
+    //compose the rotation matrix
+    R_kt << 1, new_y[0], new_z[0],
+            0, new_y[1], new_z[1],
+            0, new_y[2], new_z[2];
+    ROS_WARN("using old x axis, result %g",result);
+  }
+  else
+  {
+    //calculate a new x that lays in null space of new_z transpose
+    Eigen::Vector3d new_x;
+    //TODO
+    new_x = Eigen::Vector3d::UnitX(); //tmpTODO still using oldx
+    Eigen::Vector3d new_y = new_z.cross(new_x);
+    new_y.normalize();
+    //compose the rotation matrix
+    R_kt << new_x[0], new_y[0], new_z[0],
+            new_x[1], new_y[1], new_z[1],
+            new_x[2], new_y[2], new_z[2];
+    ROS_WARN("using new x axis, result %g",result);
+  }
+  Eigen::Vector3d trasl (cx, cy, cz);
+  Eigen::Matrix4d T_kt;
+  T_kt << R_kt(0,0), R_kt(0,1), R_kt(0,2), trasl(0),
+          R_kt(1,0), R_kt(1,1), R_kt(1,2), trasl(1), 
+          R_kt(2,0), R_kt(2,1), R_kt(2,2), trasl(2),
+          0,         0,         0,         1;
   //create directory to store transformation in "HOME/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
     boost::filesystem::create_directory(work_dir_);
   }
-  if (latitude == 60)
+  if (latitude == 70)
   {
-    T_60 = T_wl0; 
+    T_70 = T_kt;
     //Save transform to disk
     ofstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str() );
     trans_file << "## Table Transforms (camera to table) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
-    trans_file << "## <Matrix4f> "<<std::endl;
-    trans_file <<"T60:\n"<< T_60 <<std::endl; 
+    trans_file << "## <Matrix4d> "<<std::endl;
+    trans_file <<"T70:\n"<< T_70 <<std::endl;
     trans_file.close();
   }
-  else if (latitude == 40)
+  else if (latitude == 50)
   {
-    T_40 = T_wl0; 
+    T_50 = T_kt; 
     //Save transform to disk
     fstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
-    trans_file <<"T40:\n"<< T_40 <<std::endl; 
+    trans_file <<"T50:\n"<< T_50 <<std::endl; 
     trans_file.close();
   }
-  else if (latitude == 20)
+  else if (latitude == 30)
   {
-    T_20 = T_wl0; 
+    T_30 = T_kt; 
     //Save transform to disk
     fstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
-    trans_file <<"T20:\n"<< T_20; 
+    trans_file <<"T30:\n"<< T_30; 
     trans_file.close();
   }
   else
@@ -544,18 +443,16 @@ bool poseGrabber::acquire_table_transform (int latitude)
     ROS_ERROR("wrong latitude passed");
     return false;
   }
-  viewer->removeShape("end");
-  viewer->setWindowName("Table Model");
-  pcl::transformPointCloud(*cloud_, *cloud_, T_60);
-  viewer->addPointCloud(cloud_, "final");
-  viewer->addText("Final table model, press 't' to proceed.", 25,25,18,0,200,0,"info");
-  viewer->addCoordinateSystem(0.2);
-  while (!proceed)
+  //tmp view if transform is correct
+  Eigen::Matrix4d T_inv = T_kt.inverse();
+  pcl::transformPointCloud(*cloud_, *tmp, T_inv);
+  pcl::visualization::PCLVisualizer viewer;
+  viewer.addPointCloud(tmp, "final");
+  viewer.addCoordinateSystem(0.2);
+  while (!viewer.wasStopped())
   {
-    viewer->spinOnce (100);
+    viewer.spinOnce (100);
   }
-  viewer->spinOnce(100); //one last spin to update viewer
-  proceed = false;
   return true;
 }
 
@@ -563,7 +460,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
 bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
   //put lwr at first stop
-  set_lwr_pose(0.9, 60);  
+  set_lwr_pose(0.85, 70);  
 
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -579,20 +476,19 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
       }
     }
   }
-  boost::this_thread::sleep (boost::posix_time::microseconds (12000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
-  bool cal60(false), cal40(false), cal20(false);
-  cal60 = acquire_table_transform(60);
-  return cal60; //TODO tmp
+  boost::this_thread::sleep (boost::posix_time::microseconds (18000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  bool cal70(false), cal50(false), cal30(false);
+  cal70 = acquire_table_transform(70);
+  
   //put lwr at second stop
-  /*
-  set_lwr_pose(0.9, 40);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (12000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
-  cal40 = acquire_table_transform(40);
+  set_lwr_pose(0.85, 50);  
+  boost::this_thread::sleep (boost::posix_time::microseconds (15000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  cal50 = acquire_table_transform(50);
   //last stop
-  set_lwr_pose(0.9, 20);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
-  cal20 = acquire_table_transform(20);
-  if (cal60 && cal40 && cal20)
+  set_lwr_pose(0.85, 30);  
+  boost::this_thread::sleep (boost::posix_time::microseconds (15000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  cal30 = acquire_table_transform(30);
+  if (cal50 && cal70 && cal30)
   {
     calibration_= true;
     ROS_INFO("Calibration complete!!");
@@ -604,26 +500,20 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
     ROS_ERROR("Error calibrating");
     return false;
   }
-  */
 }
 
 //service callback to acquire poses
 bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_scanner_node::acquire::Response &res)
 {
-  /*
   if (!calibration_)
   {
     ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
-  */
-  keep_acquiring = true;
-  revision = false;
   int lon_pass = req.lon_pass;
   std::string name;
   if (req.objname.compare(0,1,"-") == 0) //check if we wanted flipped object
   {
-    flipped_ = true;
     name = req.objname.substr(1); //get all name except first character
     //TODO still need to implement this... if it is doable
   }
@@ -638,204 +528,153 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   {
     boost::filesystem::create_directory(current_session_);
   }
-  viewer->removeShape("end");
-  viewer->addText("prova", 25,95,18,0,50,200,"pose_t");
-  viewer->addPointCloud(cloud_, "pose");
   pcl::PCDWriter writer;
   //acquisition loops
-  while (keep_acquiring)
+  //for cycle in latitude 
+  for (int lat = 70;  lat > 20; lat-=20) //fixed latitude pass (goes to 70, 50 and 30) 
   {
-    poses.clear();
-    lati.clear();
-    longi.clear();
-    id=0;
-    //for cycle in latitude 
-    for (int lat = 60;  lat > 50; lat-=20) //fixed latitude pass (goes to 60, 40 and 20) //TODO remove fixed lat at 60
+    //move lwr in position  
+    set_lwr_pose(0.85,lat);
+    //and table
+    float c_pos = get_turnTable_pos();
+    if (c_pos != 0)
     {
-      //move lwr in position  
-      set_lwr_pose(0.9,lat);
-      //and table
-      float c_pos = get_turnTable_pos();
-      if (c_pos != 0)
+      float step = -c_pos/360;
+      for (int i=1; i<=360; i++)
       {
-        float step = -c_pos/360;
-        for (int i=1; i<=360; i++)
+        if(!set_turnTable_pos(c_pos + step*i) )
         {
-          if(!set_turnTable_pos(c_pos + step*i) )
-          {
-            ROS_ERROR("[posesScanner] turnTable communication failed!");
-            return false;
-          }
-        }
-      }
-      boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for it    TODO remove and add topic
-      for (int lon=0; lon<360; lon+=lon_pass)
-      {//for cycle in longitude
-        cloud_->clear();
-        while (!(get_turnTable_pos() >= lon-1 && get_turnTable_pos() <= lon+1))
-        {
-          if(!set_turnTable_pos(lon) )
-          {
-            ROS_ERROR("[posesScanner] turnTable communication failed!");
-            return false;
-          }
-          boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
-        }
-        if (! acquire_scene (cloud_) )
-        {
-          ROS_ERROR("[posesScanner] Cannot acquire a scene!");
+          ROS_ERROR("[posesScanner] turnTable communication failed!");
           return false;
         }
+      }
+    }
+    boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for it    TODO remove and add topic
+    for (int lon=0; lon<360; lon+=lon_pass)
+    {//for cycle in longitude
+      cloud_->clear();
+      while (!(get_turnTable_pos() >= lon-1 && get_turnTable_pos() <= lon+1))
+      {
+        if(!set_turnTable_pos(lon) )
+        {
+          ROS_ERROR("[posesScanner] turnTable communication failed!");
+          return false;
+        }
+        boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
+      }
+      if (! acquire_scene (cloud_) )
+      {
+        ROS_ERROR("[posesScanner] Cannot acquire a scene!");
+        return false;
+      }
 
-        //rotate back of how the table has rotated
-     /*   Eigen::Affine3f lon_tran; 
-        lon_tran = Eigen::AngleAxisf((lon*D2R), Eigen::Vector3f::UnitZ());  
-        pcl::transformPointCloud(*cloud_, *scene_, lon_tran); //also saves a copy of scene in memory
-     */ 
-        pcl::copyPointCloud(*cloud_, *scene_);
-        //save scene on disk
-        std::string scenename (current_session_.string() + "/SCENE_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
-        writer.writeBinaryCompressed (scenename.c_str(), *scene_);
-       
-        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
-        //temporary transform to local fram for easier cropping
-        pcl::transformPointCloud(*cloud_, *temp, T_60); //TODO chose different transforms
+      pcl::copyPointCloud(*cloud_, *scene_);
+      //save scene on disk
+      std::string scenename (current_session_.string() + "/SCENE_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      writer.writeBinaryCompressed (scenename.c_str(), *scene_);
+      
+      pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+      
+      Eigen::Matrix4d T;
+      if (lat==70)
+        T = T_70.inverse();
+      if (lat==50)
+        T = T_50.inverse();
+      if (lat==30)
+        T = T_30.inverse();
+        //temporary transform to local frame for easier cropping
+      pcl::transformPointCloud(*cloud_, *temp, T); //TODO chose different transforms
 
-        //Cropping z
-        pcl::PassThrough<pcl::PointXYZRGBA> pt;
-        pt.setInputCloud (temp);
-        pt.setFilterFieldName ("z");
-        pt.setFilterLimits (+0.01, 0.5);
-        pt.filter (*temp);
-        //x
-        pt.setInputCloud (temp);
-        pt.setFilterFieldName ("x");
-        pt.setFilterLimits (-0.25,  0.25);
-        pt.filter (*temp);
-        //y
-        pt.setInputCloud (temp);
-        pt.setFilterFieldName ("y");
-        pt.setFilterLimits (-0.25, 0.25);
-        pt.filter (*temp);
-        
-        //Radius outlier removal (if a point has not at least 2 neighbors in 5mm radius it is considered as an outlier, thus removed)
-        pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
-        radf.setInputCloud(temp);
-        radf.setRadiusSearch(0.009);
-        radf.setMinNeighborsInRadius(10);
-        radf.filter(*temp);
-        //now transform back to camera frame
-        Eigen::Matrix4f T_inverse = T_60.inverse();
-        pcl::transformPointCloud(*temp, *cloud_, T_inverse ); //TODO chose transform
+      //Cropping z
+      pcl::PassThrough<pcl::PointXYZRGBA> pt;
+      pt.setInputCloud (temp);
+      pt.setFilterFieldName ("z");
+      pt.setFilterLimits (-0.01, 0.7);
+      pt.filter (*temp);
+      //x
+      pt.setInputCloud (temp);
+      pt.setFilterFieldName ("x");
+      pt.setFilterLimits (-0.25,  0.25);
+      pt.filter (*temp);
+      //y
+      pt.setInputCloud (temp);
+      pt.setFilterFieldName ("y");
+      pt.setFilterLimits (-0.25, 0.25);
+      pt.filter (*temp);
 
-/* no plane segmentation
-        pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
-        pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
-        pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
-        pcl::SACSegmentation<pcl::PointXYZRGBA> seg(true);
-        seg.setOptimizeCoefficients (true);
-        seg.setModelType (pcl::SACMODEL_PLANE);
-        seg.setMethodType (pcl::SAC_RANSAC);
-        seg.setDistanceThreshold (0.005);
-        seg.setMaxIterations(2000);
-        seg.setInputCloud(cloud_);
-        seg.setAxis(Eigen::Vector3f::UnitZ());
-        seg.setEpsAngle(5*D2R);
-        seg.segment (*table_inliers, *coefficients);
+      // plane segmentation
+      pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
+      pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+      pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
+      seg.setOptimizeCoefficients (true);
+      seg.setModelType (pcl::SACMODEL_PLANE);
+      seg.setMethodType (pcl::SAC_RANSAC);
+      seg.setDistanceThreshold (0.015);
+      seg.setMaxIterations(2000);
+      seg.setInputCloud(temp);
+      seg.segment (*table_inliers, *coefficients);
+      pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
+      exi.setInputCloud(temp);
+      exi.setNegative(true);
+      exi.setIndices(table_inliers);
+      exi.filter(*temp);
+      //Radius outlier removal (if a point has not at least 2 neighbors in 5mm radius it is considered as an outlier, thus removed)
+      pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
+      radf.setInputCloud(temp);
+      radf.setRadiusSearch(0.01);
+      radf.setMinNeighborsInRadius(2);
+      radf.filter(*temp);
 
-        pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
-        //clustering 
-        std::vector<pcl::PointIndices> cluster_indices;
-        pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
-        ec.setClusterTolerance (0.008);    
-        ec.setMinClusterSize (200);
-        ec.setMaxClusterSize (cloud_->points.size());
-        ec.setInputCloud (tmp);
-        ec.extract (cluster_indices);
-        exi.setNegative(false);
-        exi.setInputCloud(tmp);
-        exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
-        exi.filter(*cloud_);
-        if (cluster_indices.size() > 1)
-        { 
-          std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
-          ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
-          clusters.resize(cluster_indices.size());
-          for (int i=1; i< cluster_indices.size(); ++i)
-          {
-            exi.setNegative(false);
-            exi.setInputCloud(tmp);
-            exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
-            exi.filter(clusters[i]);
-          }
-          for (int i=1; i< clusters.size(); ++i)
-            for (int j=0; j< clusters[i].points.size(); ++j)
-              cloud_->push_back(clusters[i].points[j]);
-        } 
-*/
-        lati.push_back(lat);
-        longi.push_back(lon);
-        //publish pose 
-        pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
-        //save poses in memory
-        poses.push_back(*cloud_);
-        //and let the user view it
-        std::string la(std::to_string(lat));
-        std::string lo(std::to_string(lon));
-        std::string pose_t ("latitude: " + la + "  longitude: " + lo);
-        viewer->updateText(pose_t.c_str(), 25,95,18,0,50,200,"pose_t");
-        viewer->updatePointCloud(cloud_, "pose");
-        viewer->setWindowName("Acquired Poses");
-        viewer->addCoordinateSystem(0.2);
-        viewer->spinOnce(100);
-        //move table
-        for (int t=1; t<=lon_pass; ++t)
-        {//for table steps: 1 degree
-          if (lon+t >= 360)
-            break; //skip last step
-          if(!set_turnTable_pos(lon+t) )
-          {
-            ROS_ERROR("[posesScanner] turnTable communication failed!");
-            return false;
-          }
+      //now transform back to camera frame
+      Eigen::Matrix4d T_inverse = T.inverse();
+      pcl::transformPointCloud(*temp, *cloud_, T_inverse ); //TODO chose transform
+    /*  //clustering 
+      std::vector<pcl::PointIndices> cluster_indices;
+      pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
+      ec.setClusterTolerance (0.008);    
+      ec.setMinClusterSize (200);
+      ec.setMaxClusterSize (cloud_->points.size());
+      ec.setInputCloud (tmp);
+      ec.extract (cluster_indices);
+      exi.setNegative(false);
+      exi.setInputCloud(tmp);
+      exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
+      exi.filter(*cloud_);
+      if (cluster_indices.size() > 1)
+      { 
+      std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
+      ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
+      clusters.resize(cluster_indices.size());
+      for (int i=1; i< cluster_indices.size(); ++i)
+      {
+      exi.setNegative(false);
+      exi.setInputCloud(tmp);
+      exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
+      exi.filter(clusters[i]);
+      }
+      for (int i=1; i< clusters.size(); ++i)
+      for (int j=0; j< clusters[i].points.size(); ++j)
+      cloud_->push_back(clusters[i].points[j]);
+      } 
+    */
+      //publish pose 
+      pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
+      //save poses on disk
+      std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      writer.writeBinaryCompressed (filename.c_str(), *cloud_);
+      //move table
+      for (int t=1; t<=lon_pass; ++t)
+      {//for table steps: 1 degree
+        if (lon+t >= 360)
+          break; //skip last step
+        if(!set_turnTable_pos(lon+t) )
+        {
+          ROS_ERROR("[posesScanner] turnTable communication failed!");
+          return false;
         }
       }
-    }//end of acquisitions
-    //prompt user to review acquired poses, if not satisfied, start all over again 
-    viewer->updatePointCloud(poses[0].makeShared(), "pose");
-    viewer->setWindowName("Acquired Poses");
-    /*
-    pcl::PointXYZ a,b;
-    a.x = a.y = a.z = b.x = 0;
-    b.y = 0.5 * sin(lati[0]*D2R);
-    b.z = 0.5 * cos(lati[0]*D2R);
-    viewer->addLine(a,b,0,1,1,"viewpoint");
-    */
-    keep_acquiring = false;
-    revision = true;
-    viewer->addText("Press 'n-p' to view next/previous pose.\nTo restart the whole acquisition process press 'r'. Otherwise press 't' to proceed.\nQuick cropping with mouse is activable by pressing 'x', changes will not be saved to disk unless 't' is pressed.", 25,25,18,0,200,0,"info");
-    viewer->addCoordinateSystem(0.2);
-    std::string la(std::to_string(lati[0]));
-    std::string lo(std::to_string(longi[0]));
-    std::string pose_t ("latitude: " + la + "  longitude: " + lo);
-    viewer->updateText(pose_t.c_str(), 25,95,18,0,50,200,"pose_t");
-    while (!proceed)
-    {
-      viewer->spinOnce(100);
     }
-    viewer->spinOnce(100); //one last spin to update viewer
-    revision = false;
-    proceed = false;
-    if (!keep_acquiring)
-    {
-      for (int i=0; i<poses.size(); ++i)
-      {
-        //save poses on disk
-        std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lati[i]) + "_" + std::to_string(longi[i]) + ".pcd" );
-        writer.writeBinaryCompressed (filename.c_str(), poses[i]);
-      }
-    }
-  }
+  }//end of acquisitions
   return true;
 }
 
@@ -843,11 +682,13 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "poses_scanner_node");
     poseGrabber poses_scanner_node;
+    /*
     viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
     viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
     viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
     viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
     viewer->spinOnce(100);
+    */
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     ros::spin();
     return 0;

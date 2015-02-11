@@ -1,28 +1,7 @@
 <launch>
 
-  <!-- copy instrinsic calibration files from rgbd_lwr/calibration/asus into ./ros/camera_info/ if you dont want to use default params -->
-  <!-- Launch openni2 with custom driver parameters -->
-  <include file="$(find openni2_launch)/launch/openni2.launch">  
-    <arg name="depth_registration"              value="true" />
-    <arg name="color_depth_synchronization"     value="true" />
-    <arg name="auto_exposure"                   value="true" />
-    <arg name="auto_white_balance"              value="true" />
-    <arg name="rgb_processing"                  value="true" /> 
-    <arg name="debayer_processing"              value="false" /> 
-    <arg name="ir_processing"                   value="false" /> 
-    <arg name="depth_processing"                value="true" /> 
-    <arg name="depth_registered_processing"     value="true" /> 
-    <arg name="disparity_processing"            value="false" /> 
-    <arg name="disparity_registered_processing" value="false" /> 
-    <arg name="hw_registered_processing"        value="true" /> 
-    <arg name="sw_registered_processing"        value="false"/>
-  </include>
-  
   <!-- Launch scene acquirer -->
-  <include file="$(find scene_acquirer_node)/launch/scene_acquirer_node.launch">
-    <arg name="launch_openni" value="false" />
-    <rosparam command='load' file='$(find scene_acquirer_node)/config/params_pose_scanner.yaml' />
-  </include>
+  <include file="$(find scene_acquirer_node)/launch/scene_acquirer_poses_scanner.launch" />
   
   <!-- Launch turn table interface -->
   <!-- If you see node panic, give 777 permission to usb: sudo chmod 777 /dev/ttyUSB0 -->
