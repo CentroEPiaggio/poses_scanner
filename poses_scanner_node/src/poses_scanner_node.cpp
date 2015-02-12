@@ -49,6 +49,42 @@
 
 #define D2R 0.017453293 //degrees to radians conversion
 
+//global stuff used by viewer and class
+boost::shared_ptr<pcl::visualization::PCLVisualizer> _viewer_ (new pcl::visualization::PCLVisualizer());
+Eigen::Vector3f _picked_;
+bool _proceed_ (false);
+
+//Point picking event shift+click to activate
+void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer_void)
+{
+  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);  
+  viewer->removeShape("pick"); 
+  event.getPoint (_picked_[0], _picked_[1], _picked_[2]);
+  pcl::PointXYZ centre;
+  centre.x = _picked_[0];
+  centre.y = _picked_[1];
+  centre.z = _picked_[2];
+  viewer->addSphere ( centre, 0.005, 0, 0.9, 0.3,"pick");  
+}
+
+//keyboard key press callback for viewer
+void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer_void)
+{
+  boost::shared_ptr<pcl::visualization::PCLVisualizer> viewer = *static_cast<boost::shared_ptr<pcl::visualization::PCLVisualizer> *> (viewer_void);
+  if (event.getKeySym () == "t" && event.keyDown ())
+  {
+  	viewer->removeShape("pick");
+  	viewer->removeShape("pick_text");
+    viewer->removePointCloud("pick_cloud");
+  	viewer->removeShape("final_cloud");
+  	viewer->removeShape("final_text");
+    viewer->removeCoordinateSystem();
+    viewer->removeAllShapes();
+    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
+    _proceed_ = true;
+  }
+}
+
 class poseGrabber
 {
   public:
@@ -267,14 +303,8 @@ bool poseGrabber::acquire_table_transform (int latitude)
   }
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::copyPointCloud(*cloud_, *tmp);
-  pcl::visualization::PCLVisualizer viewer3;
-  viewer3.addPointCloud(tmp, "tmp2");
-  viewer3.addCoordinateSystem(0.2);
-  while (!viewer3.wasStopped())
-  {
-    viewer3.spinOnce (100);
-  }
-  //find plane
+  
+  //find first plane
   pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
   pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
   pcl::ModelCoefficients::Ptr coeff (new pcl::ModelCoefficients);
@@ -282,7 +312,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
   seg.setMaxIterations (2000);
-  seg.setDistanceThreshold (0.04);
+  seg.setDistanceThreshold (0.03);
   seg.setInputCloud(tmp);
   seg.segment(*inliers, *coeff);
   //extract plane and whats on top
@@ -291,6 +321,16 @@ bool poseGrabber::acquire_table_transform (int latitude)
   extract.setNegative(true);
   extract.setIndices(inliers);
   extract.filter(*tmp);
+
+  _viewer_->removeShape("text");
+  _viewer_->addText("Pick the centre of the table (shift click), then press 't' when satisfied", 50,50,18,250,150,150,"pick_text");
+  _viewer_->addPointCloud(tmp,"pick_cloud");
+  while (!_proceed_)
+  {
+    _viewer_->spinOnce(100);
+  }
+  _viewer_->spinOnce(100);
+  _proceed_ = false;
   
   pcl::SACSegmentation<pcl::PointXYZRGBA> segc;
   pcl::PointIndices::Ptr in (new pcl::PointIndices);
@@ -315,13 +355,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   vg.setDownsampleAllData(true);
   vg.filter (*tmp);
   */
-  pcl::visualization::PCLVisualizer viewer2;
-  viewer2.addPointCloud(tmp, "tmp");
-  viewer2.addCoordinateSystem(0.2);
-  while (!viewer2.wasStopped())
-  {
-    viewer2.spinOnce (100);
-  }
+  
   /*
   pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (tmp));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
@@ -331,7 +365,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   Eigen::VectorXf coefficients;
   ransac.getModelCoefficients(coefficients);  
   */
-  //compute another plane model to read its normal
+  //compute another plane model to read its normal this time is the table we seek
   pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA>::Ptr table_model (new pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA> (tmp));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
   ransac.setDistanceThreshold (0.01);
@@ -339,26 +373,19 @@ bool poseGrabber::acquire_table_transform (int latitude)
   ransac.computeModel();
   Eigen::VectorXf coefficients;
   ransac.getModelCoefficients(coefficients);  
-  double cx(0),cy(0),cz(0); //centroid of table
-  for (int i=0; i< tmp->points.size(); ++i)
-  {
-    cx += tmp->points[i].x;
-    cy += tmp->points[i].y;
-    cz += tmp->points[i].z;
-  }
-  cx /= tmp->points.size();
-  cy /= tmp->points.size();
-  cz /= tmp->points.size();
   /* Coefficients of model are:
    * [0] x coordinate of normal direction
    * [1] y coordinate of normal direction
    * [2] z coordinate of normal direction
    * [3] d  of equation ax+by+cz+d=0
    */
-  double nx,ny,nz;
+  double nx,ny,nz, cx,cy,cz; //table normal and its centre picked by user
   nx = (double)coeff->values[0];
   ny = (double)coeff->values[1];
   nz = (double)coeff->values[2];
+  cx = (double)_picked_[0];
+  cy = (double)_picked_[1];
+  cz = (double)_picked_[2];
   
   Eigen::Vector3d new_z (nx,ny,nz); //the table normal
   Eigen::Vector3d vp (0 - cx, 0 - cy, 0 - cz); //viewpoint vector 0 (sensor origin) - table centre. It points "up" the table
@@ -443,16 +470,18 @@ bool poseGrabber::acquire_table_transform (int latitude)
     ROS_ERROR("wrong latitude passed");
     return false;
   }
-  //tmp view if transform is correct
+  //view if transform is correct
   Eigen::Matrix4d T_inv = T_kt.inverse();
   pcl::transformPointCloud(*cloud_, *tmp, T_inv);
-  pcl::visualization::PCLVisualizer viewer;
-  viewer.addPointCloud(tmp, "final");
-  viewer.addCoordinateSystem(0.2);
-  while (!viewer.wasStopped())
+  _viewer_->addPointCloud(tmp, "final_cloud");
+  _viewer_->addCoordinateSystem(0.2);
+  _viewer_->addText("Final table transformation, press 't' to proceed.",50,50,18,250,150,150,"final_text");
+  while (!_proceed_)
   {
-    viewer.spinOnce (100);
+    _viewer_->spinOnce (100);
   }
+  _viewer_->spinOnce(100);
+  _proceed_ = false;
   return true;
 }
 
@@ -528,7 +557,11 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   {
     boost::filesystem::create_directory(current_session_);
   }
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr c (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::PCDWriter writer;
+  _viewer_->addPointCloud(c,"pose");
+  _viewer_->addCoordinateSystem(0.2);
+  _viewer_->removeShape("text");
   //acquisition loops
   //for cycle in latitude 
   for (int lat = 70;  lat > 20; lat-=20) //fixed latitude pass (goes to 70, 50 and 30) 
@@ -583,7 +616,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       if (lat==30)
         T = T_30.inverse();
         //temporary transform to local frame for easier cropping
-      pcl::transformPointCloud(*cloud_, *temp, T); //TODO chose different transforms
+      pcl::transformPointCloud(*cloud_, *temp, T); 
 
       //Cropping z
       pcl::PassThrough<pcl::PointXYZRGBA> pt;
@@ -622,12 +655,19 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
       radf.setInputCloud(temp);
       radf.setRadiusSearch(0.01);
-      radf.setMinNeighborsInRadius(2);
+      radf.setMinNeighborsInRadius(4);
       radf.filter(*temp);
 
       //now transform back to camera frame
-      Eigen::Matrix4d T_inverse = T.inverse();
-      pcl::transformPointCloud(*temp, *cloud_, T_inverse ); //TODO chose transform
+      Eigen::Matrix4d T_inverse;
+      if (lat==70)
+        T_inverse = T_70;
+      if (lat==50)
+        T_inverse = T_50;
+      if (lat==30)
+        T_inverse = T_30;
+
+      pcl::transformPointCloud(*temp, *cloud_, T_inverse ); 
     /*  //clustering 
       std::vector<pcl::PointIndices> cluster_indices;
       pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
@@ -662,6 +702,9 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       //save poses on disk
       std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (filename.c_str(), *cloud_);
+      //also let user view the pose 
+      _viewer_->updatePointCloud(cloud_,"pose");
+      _viewer_->spinOnce(500);
       //move table
       for (int t=1; t<=lon_pass; ++t)
       {//for table steps: 1 degree
@@ -675,6 +718,10 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       }
     }
   }//end of acquisitions
+  _viewer_->removePointCloud("pose");
+  _viewer_->removeCoordinateSystem();
+  _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
+  _viewer_->spinOnce(200);
   return true;
 }
 
@@ -682,13 +729,10 @@ int main(int argc, char **argv)
 {
     ros::init(argc, argv, "poses_scanner_node");
     poseGrabber poses_scanner_node;
-    /*
-    viewer->registerPointPickingCallback ( pickEvent , (void*)&viewer);
-    viewer->registerKeyboardCallback ( keyboardEvent, (void*)&viewer);
-    viewer->registerAreaPickingCallback (AreaSelectEvent, (void*)&viewer);
-    viewer->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"end");
-    viewer->spinOnce(100);
-    */
+    _viewer_->registerPointPickingCallback ( pickEvent , (void*)&_viewer_);
+    _viewer_->registerKeyboardCallback ( keyboardEvent, (void*)&_viewer_);
+    _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
+    _viewer_->spinOnce(100);
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     ros::spin();
     return 0;
