@@ -11,6 +11,7 @@
   <include file="$(find rgbd_lwr)/launch/rgbd_lwr.launch" />
 
 	<!-- the poses scanner node  -->
+  <rosparam command="load" file="$(find poses_scanner_node)/config/parameters.yaml" />
 	<node name="poses_scanner_node" pkg="poses_scanner_node" type="poses_scanner_node" output="screen" />
 
 </launch>

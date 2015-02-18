@@ -41,6 +41,8 @@
 #include <fstream>
 #include <string>
 #include <stdlib.h>
+#include <flann/flann.h>
+#include <flann/io/hdf5.h>
 #include <boost/thread/thread.hpp>
 #include <boost/filesystem.hpp>
 #include <boost/date_time/posix_time/posix_time_types.hpp>
@@ -104,7 +106,19 @@ class poseGrabber
     float get_turnTable_pos();
     //method to move lwr
     bool set_lwr_pose(float radius, float latitude);  
-  
+    
+    //method to center table
+    void center_table();  
+    //method to center object on table
+    void center_object();  
+    //method to try segmentation and adjust parameters
+    void try_segmentation(int lat);
+    //method to call both and adjust object
+    void adjust_object();
+
+    //method to extract object from table
+    void extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object);
+
     //method to acquire scene from openni2
     bool acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired);
 
@@ -113,11 +127,12 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    bool calibration_;
+    bool calibration_, segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30;
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
-
+    double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
+    int rad_neigh_70, rad_neigh_50, rad_neigh_30;
     Eigen::Matrix4d T_70, T_50, T_30; //transforms from camera to table
 };
 
@@ -141,9 +156,39 @@ poseGrabber::poseGrabber()
   std::string home ( std::getenv("HOME") );
   work_dir_ = (home + "/PoseScanner");
   current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
-  boost::filesystem::path cal_file  (work_dir_.string() + "/table.transform");
+  boost::filesystem::path cal_file  (work_dir_.string() + "/transforms.h5");
+  nh.param<bool>("/poses_scanner/segment_70", segment_70, "true");
+  nh.param<bool>("/poses_scanner/segment_50", segment_50, "true");
+  nh.param<bool>("/poses_scanner/segment_30", segment_30, "true");
+  nh.param<bool>("/poses_scanner/clustering_70", clustering_70, "false");
+  nh.param<bool>("/poses_scanner/clustering_50", clustering_50, "false");
+  nh.param<bool>("/poses_scanner/clustering_30", clustering_30, "false");
+  nh.param<double>("/poses_scanner/zmin_70", zmin_70, -0.003);
+  nh.param<double>("/poses_scanner/zmin_50", zmin_50, -0.003);
+  nh.param<double>("/poses_scanner/zmin_30", zmin_30, -0.003);
+  nh.param<double>("/poses_scanner/seg_tol_70", seg_tol_70, 0.01);
+  nh.param<double>("/poses_scanner/seg_tol_50", seg_tol_50, 0.01);
+  nh.param<double>("/poses_scanner/seg_tol_30", seg_tol_30, 0.01);
+  nh.param<int>("/poses_scanner/rad_neigh_70", rad_neigh_70, 5);
+  nh.param<int>("/poses_scanner/rad_neigh_50", rad_neigh_50, 5);
+  nh.param<int>("/poses_scanner/rad_neigh_30", rad_neigh_30, 5);
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
+    flann::Matrix<double> transf;
+    flann::load_from_file (transf, cal_file.string(), "Table Transformations");
+    for (int i=0; i<transf.rows; ++i)
+      for (int j=0; j<transf.cols; ++j)
+      {
+        if (i>=0 && i<4)
+          T_70(i,j) = transf[i][j];
+        if (i>=4 && i<8)
+          T_50(i-4,j) = transf[i][j];
+        if (i>=8 && i<12)
+          T_30(i-8,j) = transf[i][j];
+      }
+    ROS_INFO("[poses_scanner] Found transformations saved on disk");
+    calibration_ = true;
+    /*
     std::ifstream t_file (cal_file.string().c_str());
     std::string line;
     if(t_file.is_open())
@@ -225,6 +270,7 @@ poseGrabber::poseGrabber()
       ROS_ERROR("[poses_scanner] Cant open calibration file, try rerunning calibration...");
       calibration_ = false;
     }
+    */
   }
   else
     ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
@@ -268,7 +314,7 @@ bool poseGrabber::set_lwr_pose(float radius, float latitude)
   
   //measure centre of the table in world robot frame
   task.id = 0;
-  task.position.x = -0.62;
+  task.position.x = -0.68;
   task.position.y =  0 + (radius * cos(latitude*D2R));
   task.position.z = 0.137 + (radius * sin(latitude*D2R)); 
   task.orientation.roll = 1.57079 + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground)
@@ -291,6 +337,250 @@ float poseGrabber::get_turnTable_pos()
     return -1;
   }
   return get_srv.response.current_pos;
+}
+
+void poseGrabber::center_table()
+{
+  set_lwr_pose(0.8,50);
+  _proceed_ = false;
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  _viewer_->removeShape("text");
+  _viewer_->addText("Center the table on the blue line, then press 't' when satisfied", 50,50,18,250,150,150,"center_t");
+  _viewer_->addPointCloud(tmp,"table_cloud");
+  pcl::PointXYZ a,b;
+  a.x = a.y = b.x = b.y = a.z =0;
+  b.z = 2;
+  _viewer_->addLine(a,b,0,0.2,0.95,"line");
+  while (!_proceed_)
+  { 
+    acquire_scene(tmp);
+    _viewer_->updatePointCloud(tmp,"table_cloud");
+    _viewer_->spinOnce(300);
+  }
+  _proceed_ = false;
+  _viewer_->removeShape("line"); 
+  _viewer_->removeShape("center_t");
+  _viewer_->removePointCloud("table_cloud");
+  _viewer_->spinOnce(100);
+}
+
+void poseGrabber::center_object()
+{
+  _proceed_ = false;
+  set_lwr_pose(0.8,50);
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acq (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  _viewer_->removeShape("text");
+  _viewer_->addText("Center the object on the table, then press 't' when satisfied", 50,50,18,250,150,150,"center_ob");
+  _viewer_->addPointCloud(tmp,"cloud_ob");
+  pcl::ModelCoefficients x_plane, y_plane;
+  x_plane.values.resize(4);
+  x_plane.values[0] = 0;
+  x_plane.values[1] = 1;
+  x_plane.values[2] = 0;
+  x_plane.values[3] = 0;
+  y_plane.values.resize(4);
+  y_plane.values[0] = 1;
+  y_plane.values[1] = 0;
+  y_plane.values[2] = 0;
+  y_plane.values[3] = 0;
+  Eigen::Matrix4d T_inv = T_50.inverse();
+  acquire_scene(acq);
+  pcl::transformPointCloud(*acq, *tmp, T_inv);
+  _viewer_->addPlane(x_plane,"plane_x");
+  _viewer_->addPlane(y_plane,"plane_y");
+  _viewer_->addCoordinateSystem(0.2);
+  _viewer_->spinOnce(100);
+  while (!_proceed_)
+  { 
+    acquire_scene(acq);
+    pcl::transformPointCloud(*acq, *tmp, T_inv);
+    _viewer_->updatePointCloud(tmp,"cloud_ob");
+    _viewer_->spinOnce(300);
+  }
+  _proceed_ = false;
+  _viewer_->removeShape("center_ob"); 
+  _viewer_->removeShape("plane_x");
+  _viewer_->removeShape("plane_y");
+  _viewer_->removePointCloud("cloud_ob");
+  _viewer_->spinOnce(100);
+}
+
+void poseGrabber::try_segmentation(int lat)
+{
+  _proceed_ = false;
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acq (new pcl::PointCloud<pcl::PointXYZRGBA>);
+  _viewer_->removeShape("text");
+  _viewer_->addText("Check segmentation and adjust parameters of corresponding latitude if needed, then press 't' when satisfied", 50,50,18,250,150,150,"seg_t");
+  Eigen::Matrix4d T_inv;
+  if (lat == 70)
+    T_inv = T_70.inverse();
+  if (lat == 50)
+    T_inv = T_50.inverse();
+  if (lat == 30)
+    T_inv = T_30.inverse();
+  acquire_scene(acq);
+  pcl::transformPointCloud(*acq, *tmp, T_inv);
+  _viewer_->addCoordinateSystem(0.2);
+  _viewer_->addPointCloud(tmp,"seg_cl");
+  _viewer_->spinOnce(100);
+  while (!_proceed_)
+  { 
+    acquire_scene(acq);
+    pcl::transformPointCloud(*acq, *tmp, T_inv);
+    pcl::PointCloud<pcl::PointXYZRGBA>::Ptr obj (new pcl::PointCloud<pcl::PointXYZRGBA>);
+    extract_object(lat, tmp, obj);
+    _viewer_->updatePointCloud(obj,"seg_cl");
+    _viewer_->spinOnce(300);
+  }
+  _proceed_ = false;
+  _viewer_->removeShape("seg_t");
+  _viewer_->removePointCloud("seg_cl");
+  _viewer_->spinOnce(100);
+}
+
+void poseGrabber::adjust_object()
+{
+  float c_pos = get_turnTable_pos();
+  if (c_pos != 0)
+  {
+    float step = -c_pos/360;
+    for (int i=1; i<=360; i++)
+    {
+      if(!set_turnTable_pos(c_pos + step*i) )
+      {
+        ROS_ERROR("[posesScanner] turnTable communication failed!");
+      }
+    }
+  }
+  center_object();
+  set_lwr_pose(0.8,70);
+  try_segmentation(70);
+  set_lwr_pose(0.8,50);
+  try_segmentation(50);
+  set_lwr_pose(0.8,30);
+  try_segmentation(30);
+}
+
+void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object)
+{
+  bool segment,clustering;
+  double zmin,seg_tol;
+  int rad_neigh;
+  if (lat==70)
+  {
+    nh.getParam("/poses_scanner/zmin_70", zmin_70);
+    nh.getParam("/poses_scanner/segment_70", segment_70);
+    nh.getParam("/poses_scanner/clustering_70", clustering_70);
+    nh.getParam("/poses_scanner/seg_tol_70", seg_tol_70);
+    nh.getParam("/poses_scanner/rad_neigh_70", rad_neigh_70);
+    segment = segment_70;
+    clustering = clustering_70;
+    zmin = zmin_70;
+    seg_tol = seg_tol_70;
+    rad_neigh = rad_neigh_70;
+  }
+  if (lat==50)
+  {
+    nh.getParam("/poses_scanner/zmin_50", zmin_50);
+    nh.getParam("/poses_scanner/segment_50", segment_50);
+    nh.getParam("/poses_scanner/clustering_50", clustering_50);
+    nh.getParam("/poses_scanner/seg_tol_50", seg_tol_50);
+    nh.getParam("/poses_scanner/rad_neigh_50", rad_neigh_50);
+    segment = segment_50;
+    clustering = clustering_50;
+    zmin = zmin_50;
+    seg_tol = seg_tol_50;
+    rad_neigh = rad_neigh_50;
+  }
+  if (lat==30)
+  {
+    nh.getParam("/poses_scanner/zmin_30", zmin_30);
+    nh.getParam("/poses_scanner/segment_30", segment_30);
+    nh.getParam("/poses_scanner/clustering_30", clustering_30);
+    nh.getParam("/poses_scanner/seg_tol_30", seg_tol_30);
+    nh.getParam("/poses_scanner/rad_neigh_30", rad_neigh_30);
+    segment = segment_30;
+    clustering = clustering_30;
+    zmin = zmin_30;
+    seg_tol = seg_tol_30;
+    rad_neigh = rad_neigh_30;
+  }
+  //Cropping z
+  pcl::PassThrough<pcl::PointXYZRGBA> pt;
+  pt.setInputCloud (scene);
+  pt.setFilterFieldName ("z");
+  pt.setFilterLimits (zmin, 0.7);
+  pt.filter (*scene);
+  //x
+  pt.setInputCloud (scene);
+  pt.setFilterFieldName ("x");
+  pt.setFilterLimits (-0.25,  0.25);
+  pt.filter (*scene);
+  //y
+  pt.setInputCloud (scene);
+  pt.setFilterFieldName ("y");
+  pt.setFilterLimits (-0.25, 0.25);
+  pt.filter (*scene);
+
+  pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
+  // plane segmentation
+  if (segment)
+  {
+    pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
+    pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
+    pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
+    seg.setOptimizeCoefficients (true);
+    seg.setModelType (pcl::SACMODEL_PLANE);
+    seg.setMethodType (pcl::SAC_RANSAC);
+    seg.setDistanceThreshold (seg_tol);
+    seg.setMaxIterations(2000);
+    seg.setInputCloud(scene);
+    seg.segment (*table_inliers, *coefficients);
+    exi.setInputCloud(scene);
+    exi.setNegative(true);
+    exi.setIndices(table_inliers);
+    exi.filter(*scene);
+  }
+  //Radius outlier removal (if a point has not at least 4 neighbors in 1cm radius it is considered as an outlier, thus removed)
+  pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
+  radf.setInputCloud(scene);
+  radf.setRadiusSearch(0.01);
+  radf.setMinNeighborsInRadius(rad_neigh);
+  radf.filter(*object);
+  //clustering 
+  if (clustering)
+  {
+    std::vector<pcl::PointIndices> cluster_indices;
+    pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
+    ec.setClusterTolerance (0.008);    
+    ec.setMinClusterSize (200);
+    ec.setMaxClusterSize (object->points.size());
+    ec.setInputCloud (object);
+    ec.extract (cluster_indices);
+    exi.setNegative(false);
+    exi.setInputCloud(object);
+    exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
+    exi.filter(*scene);
+    if (cluster_indices.size() > 1)
+    { 
+      std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
+      ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
+      clusters.resize(cluster_indices.size());
+      for (int i=1; i< cluster_indices.size(); ++i)
+      {
+        exi.setNegative(false);
+        exi.setInputCloud(object);
+        exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
+        exi.filter(clusters[i]);
+      }
+      for (int i=1; i< clusters.size(); ++i)
+        for (int j=0; j< clusters[i].points.size(); ++j)
+          scene->push_back(clusters[i].points[j]);
+    }
+    pcl::copyPointCloud(*scene, *object);
+  }
 }
 
 bool poseGrabber::acquire_table_transform (int latitude)
@@ -440,30 +730,33 @@ bool poseGrabber::acquire_table_transform (int latitude)
   {
     T_70 = T_kt;
     //Save transform to disk
-    ofstream trans_file;
+  /*  ofstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str() );
     trans_file << "## Table Transforms (camera to table) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
     trans_file << "## <Matrix4d> "<<std::endl;
     trans_file <<"T70:\n"<< T_70 <<std::endl;
     trans_file.close();
+    */
   }
   else if (latitude == 50)
   {
     T_50 = T_kt; 
     //Save transform to disk
-    fstream trans_file;
+   /* fstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
     trans_file <<"T50:\n"<< T_50 <<std::endl; 
     trans_file.close();
+    */
   }
   else if (latitude == 30)
   {
     T_30 = T_kt; 
     //Save transform to disk
-    fstream trans_file;
+    /*fstream trans_file;
     trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
     trans_file <<"T30:\n"<< T_30; 
     trans_file.close();
+    */
   }
   else
   {
@@ -475,6 +768,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   pcl::transformPointCloud(*cloud_, *tmp, T_inv);
   _viewer_->addPointCloud(tmp, "final_cloud");
   _viewer_->addCoordinateSystem(0.2);
+  _viewer_->removeShape("text");
   _viewer_->addText("Final table transformation, press 't' to proceed.",50,50,18,250,150,150,"final_text");
   while (!_proceed_)
   {
@@ -488,8 +782,9 @@ bool poseGrabber::acquire_table_transform (int latitude)
 //service callback for calibration
 bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
+  center_table();
   //put lwr at first stop
-  set_lwr_pose(0.85, 70);  
+  set_lwr_pose(0.8, 70);  
 
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -505,20 +800,34 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
       }
     }
   }
-  boost::this_thread::sleep (boost::posix_time::microseconds (18000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   bool cal70(false), cal50(false), cal30(false);
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
-  set_lwr_pose(0.85, 50);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (15000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  set_lwr_pose(0.8, 50);  
+  center_table();
+  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal50 = acquire_table_transform(50);
   //last stop
-  set_lwr_pose(0.85, 30);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (15000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  set_lwr_pose(0.8, 30);  
+  center_table();
+  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
   if (cal50 && cal70 && cal30)
   {
+    flann::Matrix<double> Transforms (new double[12*4],12,4);
+    for (int i=0; i<Transforms.rows; ++i)
+      for (int j=0; j<Transforms.cols; ++j)
+      {
+        if (i>=0 && i<4)
+          Transforms[i][j] = T_70(i,j);
+        if (i>=4 && i<8)
+          Transforms[i][j] = T_50(i-4,j);
+        if (i>=8 && i<12)
+          Transforms[i][j] = T_30(i-8,j);
+      }
+    flann::save_to_file (Transforms, work_dir_.string() +  "/transforms.h5", "Table Transformations");
     calibration_= true;
     ROS_INFO("Calibration complete!!");
     ROS_INFO("You don't need to run this again, unless you move the table, or the camera with respect to lwr_7_link");  
@@ -539,6 +848,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
+  adjust_object();
   int lon_pass = req.lon_pass;
   std::string name;
   if (req.objname.compare(0,1,"-") == 0) //check if we wanted flipped object
@@ -560,14 +870,14 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr c (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::PCDWriter writer;
   _viewer_->addPointCloud(c,"pose");
-  _viewer_->addCoordinateSystem(0.2);
+  _viewer_->addCoordinateSystem(0.15);
   _viewer_->removeShape("text");
   //acquisition loops
   //for cycle in latitude 
   for (int lat = 70;  lat > 20; lat-=20) //fixed latitude pass (goes to 70, 50 and 30) 
   {
     //move lwr in position  
-    set_lwr_pose(0.85,lat);
+    set_lwr_pose(0.8,lat);
     //and table
     float c_pos = get_turnTable_pos();
     if (c_pos != 0)
@@ -582,7 +892,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         }
       }
     }
-    boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for it    TODO remove and add topic
+    boost::this_thread::sleep (boost::posix_time::microseconds (18000000)); //wait for it    TODO remove and add topic
     for (int lon=0; lon<360; lon+=lon_pass)
     {//for cycle in longitude
       cloud_->clear();
@@ -607,6 +917,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       writer.writeBinaryCompressed (scenename.c_str(), *scene_);
       
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
+      pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object (new pcl::PointCloud<pcl::PointXYZRGBA>);
       
       Eigen::Matrix4d T;
       if (lat==70)
@@ -617,46 +928,19 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         T = T_30.inverse();
         //temporary transform to local frame for easier cropping
       pcl::transformPointCloud(*cloud_, *temp, T); 
-
-      //Cropping z
-      pcl::PassThrough<pcl::PointXYZRGBA> pt;
-      pt.setInputCloud (temp);
-      pt.setFilterFieldName ("z");
-      pt.setFilterLimits (-0.01, 0.7);
-      pt.filter (*temp);
-      //x
-      pt.setInputCloud (temp);
-      pt.setFilterFieldName ("x");
-      pt.setFilterLimits (-0.25,  0.25);
-      pt.filter (*temp);
-      //y
-      pt.setInputCloud (temp);
-      pt.setFilterFieldName ("y");
-      pt.setFilterLimits (-0.25, 0.25);
-      pt.filter (*temp);
-
-      // plane segmentation
-      pcl::PointIndices::Ptr table_inliers (new pcl::PointIndices);
-      pcl::ModelCoefficients::Ptr coefficients (new pcl::ModelCoefficients);
-      pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
-      seg.setOptimizeCoefficients (true);
-      seg.setModelType (pcl::SACMODEL_PLANE);
-      seg.setMethodType (pcl::SAC_RANSAC);
-      seg.setDistanceThreshold (0.015);
-      seg.setMaxIterations(2000);
-      seg.setInputCloud(temp);
-      seg.segment (*table_inliers, *coefficients);
-      pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
-      exi.setInputCloud(temp);
-      exi.setNegative(true);
-      exi.setIndices(table_inliers);
-      exi.filter(*temp);
-      //Radius outlier removal (if a point has not at least 2 neighbors in 5mm radius it is considered as an outlier, thus removed)
-      pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
-      radf.setInputCloud(temp);
-      radf.setRadiusSearch(0.01);
-      radf.setMinNeighborsInRadius(4);
-      radf.filter(*temp);
+      extract_object(lat, temp, object);
+      
+      //save the cloud also in local frame
+      Eigen::AngleAxisd rot (lon*D2R, Eigen::Vector3d::UnitZ() );
+      pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_local (new pcl::PointCloud<pcl::PointXYZRGBA>);
+      Eigen::Matrix4d T_lil0;
+      T_lil0 << rot.matrix()(0,0), rot.matrix()(0,1), rot.matrix()(0,2), 0,
+                rot.matrix()(1,0), rot.matrix()(1,1), rot.matrix()(1,2), 0,
+                rot.matrix()(2,0), rot.matrix()(2,1), rot.matrix()(2,2), 0,
+                0,                 0,                 0,                 1;
+      pcl::transformPointCloud(*object, *cloud_local, T_lil0);    
+      std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      writer.writeBinaryCompressed (filename.c_str(), *cloud_local);
 
       //now transform back to camera frame
       Eigen::Matrix4d T_inverse;
@@ -667,44 +951,15 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       if (lat==30)
         T_inverse = T_30;
 
-      pcl::transformPointCloud(*temp, *cloud_, T_inverse ); 
-    /*  //clustering 
-      std::vector<pcl::PointIndices> cluster_indices;
-      pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
-      ec.setClusterTolerance (0.008);    
-      ec.setMinClusterSize (200);
-      ec.setMaxClusterSize (cloud_->points.size());
-      ec.setInputCloud (tmp);
-      ec.extract (cluster_indices);
-      exi.setNegative(false);
-      exi.setInputCloud(tmp);
-      exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
-      exi.filter(*cloud_);
-      if (cluster_indices.size() > 1)
-      { 
-      std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
-      ROS_WARN("[posesScanner] More than 1 cluster found... Adding them all together.");
-      clusters.resize(cluster_indices.size());
-      for (int i=1; i< cluster_indices.size(); ++i)
-      {
-      exi.setNegative(false);
-      exi.setInputCloud(tmp);
-      exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
-      exi.filter(clusters[i]);
-      }
-      for (int i=1; i< clusters.size(); ++i)
-      for (int j=0; j< clusters[i].points.size(); ++j)
-      cloud_->push_back(clusters[i].points[j]);
-      } 
-    */
+      pcl::transformPointCloud(*cloud_local, *cloud_, T_inverse ); 
       //publish pose 
-      pub_poses_.publish(*cloud_); //automatic conversion to rosmsg
+      pub_poses_.publish(*cloud_local); //automatic conversion to rosmsg
       //save poses on disk
-      std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
-      writer.writeBinaryCompressed (filename.c_str(), *cloud_);
+      std::string kinectname (current_session_.string() + "/KINECT_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      writer.writeBinaryCompressed (kinectname.c_str(), *cloud_);
       //also let user view the pose 
-      _viewer_->updatePointCloud(cloud_,"pose");
-      _viewer_->spinOnce(500);
+      _viewer_->updatePointCloud(cloud_local,"pose");
+      _viewer_->spinOnce(300);
       //move table
       for (int t=1; t<=lon_pass; ++t)
       {//for table steps: 1 degree

@@ -7,6 +7,7 @@ project(poses_scanner_node)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED roscpp std_srvs sensor_msgs pcl_ros pcl_conversions message_generation tf)
 find_package(PCL 1.7 REQUIRED)
+find_package(HDF5 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
 find_package(Boost REQUIRED)
@@ -95,6 +96,7 @@ catkin_package(
 include_directories(
 	${catkin_INCLUDE_DIRS}
 	${pcl_INCLUDE_DIRS}
+  ${HDF5_INCLUDE_DIR}
 	)
 
 ## Declare a cpp library
@@ -119,6 +121,7 @@ add_dependencies(poses_scanner_node
 target_link_libraries(poses_scanner_node
    ${catkin_LIBRARIES}
    ${PCL_LIBRARIES}
+   ${HDF5_LIBRARIES}
 	)
 
 #############
