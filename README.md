@@ -31,6 +31,6 @@ At the start of each session make sure you acquired the various table transforma
 You don't need to launch this service again, unless you move the turntable from its position or you move the Asus Xtion from the Kuka arm.
 
 To actually acquire poses of an object use the command:
-`rosservice call /poses_scanner_node acquire 'name: OBJNAME lonpass:LONPASS'
+`rosservice call /poses_scanner_node acquire 'name: OBJNAME lonpass:LONPASS'`
 
 
