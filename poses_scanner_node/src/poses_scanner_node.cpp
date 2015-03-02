@@ -33,7 +33,7 @@
 #include "poses_scanner_node/table.h" 
 #include "turn_table_interface_node/setPos.h"
 #include "turn_table_interface_node/getPos.h"
-#include "scene_acquirer_node/acquire_scene.h"
+#include "scene_filter_node/acquire_scene.h"
 #include "lwr_controllers/PoseRPY.h"
 
 //general utilities
@@ -279,11 +279,11 @@ poseGrabber::poseGrabber()
 //wrapper function to grab a cloud
 bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
 { 
-  std::string acquire_scene_srv_name = nh.resolveName("/scene_acquirer_node/acquire_scene");
-  scene_acquirer_node::acquire_scene acquire_srv;
+  std::string acquire_scene_srv_name = nh.resolveName("/scene_filter_node/acquire_scene");
+  scene_filter_node::acquire_scene acquire_srv;
   acquire_srv.request.save = "false";
   boost::this_thread::sleep (boost::posix_time::microseconds (300000));
-  if ( !ros::service::call<scene_acquirer_node::acquire_scene>(acquire_scene_srv_name, acquire_srv))
+  if ( !ros::service::call<scene_filter_node::acquire_scene>(acquire_scene_srv_name, acquire_srv))
   {
     ROS_ERROR("[posesScanner] Acquire scene service failed!");
     return false;
