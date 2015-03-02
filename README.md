@@ -22,7 +22,7 @@ Execute `catkin_make` inside the repository root to update any changes.
 - Poses scanner tool loaded and mounted on right arm.
 `TODO` more info in the near future
 
-## Usage
+## Usage (WORK IN PROGRESS)
 To launch the poses scanner execute:
 `roslaunch poses_scanner_node poses_scanner_node.launch`
 

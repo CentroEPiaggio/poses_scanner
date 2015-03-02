@@ -1,7 +1,7 @@
 <launch>
 
-  <!-- Launch scene acquirer -->
-  <include file="$(find scene_acquirer_node)/launch/scene_acquirer_poses_scanner.launch" />
+  <!-- Launch scene filter -->
+  <include file="$(find scene_filter)/launch/scene_filter_poses_scanner.launch" />
   
   <!-- Launch turn table interface -->
   <!-- If you see node panic, give 777 permission to usb: sudo chmod 777 /dev/ttyUSB0 -->
