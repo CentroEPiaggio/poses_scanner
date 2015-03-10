@@ -859,7 +859,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       Eigen::Vector4f trasl_sensor (T_sensor(0,3), T_sensor(1,3), T_sensor(2,3), 1);
       //save sensor information in cloud
       cloud_local->sensor_origin_ = trasl_sensor;
-      cloud_local->sensor_orientations_ = Q_sensor;
+      cloud_local->sensor_orientation_ = Q_sensor;
       //now save local cloud
       std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (filename.c_str(), *cloud_local);
