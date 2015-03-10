@@ -105,7 +105,7 @@ class poseGrabber
     //method to read turn table position
     float get_turnTable_pos();
     //method to move lwr
-    bool set_lwr_pose(float radius, float latitude);  
+    bool set_lwr_pose(double radius, float latitude);  
     
     //method to center table
     void center_table();  
@@ -114,7 +114,7 @@ class poseGrabber
     //method to try segmentation and adjust parameters
     void try_segmentation(int lat);
     //method to call both and adjust object
-    void adjust_object();
+    void adjust_object(std::string name);
 
     //method to extract object from table
     void extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object);
@@ -132,6 +132,7 @@ class poseGrabber
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
     double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
+    double lwr_x, lwr_y, lwr_z, lwr_roll, lwr_pitch, lwr_yaw, lwr_rad;
     int rad_neigh_70, rad_neigh_50, rad_neigh_30;
     Eigen::Matrix4f T_70, T_50, T_30; //transforms from camera to table
 };
@@ -172,6 +173,13 @@ poseGrabber::poseGrabber()
   nh.param<int>("/poses_scanner/rad_neigh_70", rad_neigh_70, 5);
   nh.param<int>("/poses_scanner/rad_neigh_50", rad_neigh_50, 5);
   nh.param<int>("/poses_scanner/rad_neigh_30", rad_neigh_30, 5);
+  nh.param<double>("/poses_scanner/lwr_x", lwr_x, -0.65);
+  nh.param<double>("/poses_scanner/lwr_y", lwr_y, 0);
+  nh.param<double>("/poses_scanner/lwr_z", lwr_z, 0.13);
+  nh.param<double>("/poses_scanner/lwr_Roll", lwr_roll, 1.57079);
+  nh.param<double>("/poses_scanner/lwr_Pitch", lwr_pitch, 0);
+  nh.param<double>("/poses_scanner/lwr_Yaw", lwr_yaw, 0);
+  nh.param<double>("/poses_scanner/lwr_rad", lwr_rad, 0.8);
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
     flann::Matrix<float> transf;
@@ -225,18 +233,24 @@ bool poseGrabber::set_turnTable_pos(float pos)
 }
 
 //wrapper function to move lwr
-bool poseGrabber::set_lwr_pose(float radius, float latitude)
+bool poseGrabber::set_lwr_pose(double radius, float latitude)
 {
   lwr_controllers::PoseRPY task;
+  nh.getParam("/poses_scanner/lwr_x", lwr_x);
+  nh.getParam("/poses_scanner/lwr_y", lwr_y);
+  nh.getParam("/poses_scanner/lwr_z", lwr_z);
+  nh.getParam("/poses_scanner/lwr_Roll", lwr_roll);
+  nh.getParam("/poses_scanner/lwr_Pitch", lwr_pitch);
+  nh.getParam("/poses_scanner/lwr_Yaw", lwr_yaw);
   
   //measure centre of the table in world robot frame
   task.id = 0;
-  task.position.x = -0.68;
-  task.position.y =  0 + (radius * cos(latitude*D2R));
-  task.position.z = 0.137 + (radius * sin(latitude*D2R)); 
-  task.orientation.roll = 1.57079 + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground, 0° points at ceiling)
-  task.orientation.pitch = 0; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
-  task.orientation.yaw = 0; //this is yaw is in world frame! (zero is looking at the window for right arm)
+  task.position.x = lwr_x;
+  task.position.y =  lwr_y + (radius * cos(latitude*D2R));
+  task.position.z = lwr_z + (radius * sin(latitude*D2R)); 
+  task.orientation.roll = lwr_roll + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground, 0° points at ceiling)
+  task.orientation.pitch = lwr_pitch; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
+  task.orientation.yaw = lwr_yaw; //this is yaw is in world frame! (zero is looking at the window for right arm)
   
   //send the task to the robot
   pub_lwr_.publish(task); 
@@ -258,7 +272,8 @@ float poseGrabber::get_turnTable_pos()
 
 void poseGrabber::center_table()
 {
-  set_lwr_pose(0.8,50);
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
+  set_lwr_pose(lwr_rad,50);
   _proceed_ = false;
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   _viewer_->removeShape("text");
@@ -283,8 +298,9 @@ void poseGrabber::center_table()
 
 void poseGrabber::center_object()
 {
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   _proceed_ = false;
-  set_lwr_pose(0.8,50);
+  set_lwr_pose(lwr_rad,50);
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acq (new pcl::PointCloud<pcl::PointXYZRGBA>);
   _viewer_->removeShape("text");
@@ -357,7 +373,7 @@ void poseGrabber::try_segmentation(int lat)
   _viewer_->spinOnce(100);
 }
 
-void poseGrabber::adjust_object()
+void poseGrabber::adjust_object(std::string name)
 {
   float c_pos = get_turnTable_pos();
   if (c_pos != 0)
@@ -371,12 +387,12 @@ void poseGrabber::adjust_object()
       }
     }
   }
-  center_object();
-  set_lwr_pose(0.8,70);
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
+  set_lwr_pose(lwr_rad,70);
   try_segmentation(70);
-  set_lwr_pose(0.8,50);
+  set_lwr_pose(lwr_rad,50);
   try_segmentation(50);
-  set_lwr_pose(0.8,30);
+  set_lwr_pose(lwr_rad,30);
   try_segmentation(30);
 }
 
@@ -680,8 +696,9 @@ bool poseGrabber::acquire_table_transform (int latitude)
 bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
   center_table();
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   //put lwr at first stop
-  set_lwr_pose(0.8, 70);  
+  set_lwr_pose(lwr_rad, 70);  
 
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -702,12 +719,12 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
-  set_lwr_pose(0.8, 50);  
+  set_lwr_pose(lwr_rad, 50);  
   center_table();
   boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal50 = acquire_table_transform(50);
   //last stop
-  set_lwr_pose(0.8, 30);  
+  set_lwr_pose(lwr_rad, 30);  
   center_table();
   boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
@@ -745,7 +762,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
-  adjust_object();
   int lon_pass = req.lon_pass;
   std::string name;
   if (req.objname.compare(0,1,"-") == 0) //check if we wanted flipped object
@@ -755,6 +771,8 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   }
   else
     name = req.objname; 
+  center_object();
+  adjust_object(name);
   //create directory to store poses writes into "~/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
@@ -771,10 +789,11 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   _viewer_->removeShape("text");
   //acquisition loops
   //for cycle in latitude 
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   for (int lat = 70;  lat > 20; lat-=20) //fixed latitude pass (goes to 70, 50 and 30) 
   {
     //move lwr in position  
-    set_lwr_pose(0.8,lat);
+    set_lwr_pose(lwr_rad,lat);
     //and table
     float c_pos = get_turnTable_pos();
     if (c_pos != 0)
