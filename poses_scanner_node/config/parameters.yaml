@@ -13,3 +13,10 @@ poses_scanner/clustering_30: false
 poses_scanner/rad_neigh_70: 25
 poses_scanner/rad_neigh_50: 25
 poses_scanner/rad_neigh_30: 35
+posese_scanner/lwr_x: -0.65
+posese_scanner/lwr_y: 0
+posese_scanner/lwr_z: 0.13
+posese_scanner/lwr_Roll: 1.57079
+posese_scanner/lwr_Pitch: 0
+posese_scanner/lwr_Yaw: 0
+posese_scanner/lwr_rad: 0.8
