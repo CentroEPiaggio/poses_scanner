@@ -12,7 +12,10 @@ You require a working Ros(indigo) repository with the following packages:
     * rgbd_launch
  - kuka_lwr (from [CentroPiaggio repositories](https://github.com/CentroEPiaggio/kuka-lwr))
  - [scene_filter](https://bitbucket.org/Tabjones/scene_filter)
- 
+
+Please note that currently poses scanner works only with kuka_lwr at commit 12ea17d13f6b70c1451ea73aa25c6007a81451bf.
+Run the following inside kuka_lwr package
+`git checkout 12ea17d13f6b70c1451ea73aa25c6007a81451bf`
 Execute `catkin_make` inside the repository root to update any changes.
 ### Hardware Setup
 - Turntable
