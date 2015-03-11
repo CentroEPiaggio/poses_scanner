@@ -1,6 +1,8 @@
 <launch>
   <!-- LAUNCH INTERFACE -->
-  <arg name="robot_name" value="lwr"/>
+  <arg name="robot_name" default="lwr"/>
+  <arg name="controller" default="OneTaskInverseKinematics" />
+  <arg name="stopped_controllers" default="OneTaskInverseKinematics" />
 
   <!-- LAUNCH IMPLEMENTATION -->
 
@@ -14,7 +16,10 @@
   <node name="robot_state_publisher" pkg="robot_state_publisher" type="state_publisher"  />
 
   <!-- load controllers -->
-  <include file="$(find lwr_controllers)/launch/load_controllers.launch"/>
+  <include file="$(find lwr_controllers)/launch/load_controller.launch">
+    <arg name="controller" value="$(arg controller)"/>
+    <arg name="stopped_controllers" value="$(arg stopped_controllers)"/>
+  </include>
 
   <!-- load hw interface -->  
   <include file="$(find lwr_hw)/launch/lwr_hw.launch">
