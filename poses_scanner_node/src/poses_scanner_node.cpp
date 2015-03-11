@@ -105,7 +105,7 @@ class poseGrabber
     //method to read turn table position
     float get_turnTable_pos();
     //method to move lwr
-    bool set_lwr_pose(float radius, float latitude);  
+    bool set_lwr_pose(double radius, float latitude);  
     
     //method to center table
     void center_table();  
@@ -114,7 +114,7 @@ class poseGrabber
     //method to try segmentation and adjust parameters
     void try_segmentation(int lat);
     //method to call both and adjust object
-    void adjust_object();
+    void adjust_object(std::string name);
 
     //method to extract object from table
     void extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object);
@@ -132,8 +132,9 @@ class poseGrabber
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
     double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
+    double lwr_x, lwr_y, lwr_z, lwr_roll, lwr_pitch, lwr_yaw, lwr_rad;
     int rad_neigh_70, rad_neigh_50, rad_neigh_30;
-    Eigen::Matrix4d T_70, T_50, T_30; //transforms from camera to table
+    Eigen::Matrix4f T_70, T_50, T_30; //transforms from camera to table
 };
 
 //Class Constructor
@@ -152,7 +153,7 @@ poseGrabber::poseGrabber()
   scene_ = b.makeShared();
   timestamp_ = boost::posix_time::second_clock::local_time();
   calibration_ = false;
-  //check if we have already calibrated
+  //check if we have already found table transformations
   std::string home ( std::getenv("HOME") );
   work_dir_ = (home + "/PoseScanner");
   current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
@@ -172,9 +173,16 @@ poseGrabber::poseGrabber()
   nh.param<int>("/poses_scanner/rad_neigh_70", rad_neigh_70, 5);
   nh.param<int>("/poses_scanner/rad_neigh_50", rad_neigh_50, 5);
   nh.param<int>("/poses_scanner/rad_neigh_30", rad_neigh_30, 5);
+  nh.param<double>("/poses_scanner/lwr_x", lwr_x, -0.65);
+  nh.param<double>("/poses_scanner/lwr_y", lwr_y, 0);
+  nh.param<double>("/poses_scanner/lwr_z", lwr_z, 0.13);
+  nh.param<double>("/poses_scanner/lwr_Roll", lwr_roll, 1.57079);
+  nh.param<double>("/poses_scanner/lwr_Pitch", lwr_pitch, 0);
+  nh.param<double>("/poses_scanner/lwr_Yaw", lwr_yaw, 0);
+  nh.param<double>("/poses_scanner/lwr_rad", lwr_rad, 0.8);
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
-    flann::Matrix<double> transf;
+    flann::Matrix<float> transf;
     flann::load_from_file (transf, cal_file.string(), "Table Transformations");
     for (int i=0; i<transf.rows; ++i)
       for (int j=0; j<transf.cols; ++j)
@@ -188,89 +196,6 @@ poseGrabber::poseGrabber()
       }
     ROS_INFO("[poses_scanner] Found transformations saved on disk");
     calibration_ = true;
-    /*
-    std::ifstream t_file (cal_file.string().c_str());
-    std::string line;
-    if(t_file.is_open())
-    {
-      ROS_INFO("[poses_scanner] Found calibration saved on disk");
-      calibration_ = true;
-      int tr_type (0), row(0);
-      while (getline (t_file, line))
-      {
-        if (line.compare(0,1,"#") == 0)
-        {
-          //do nothing, comment line...
-          continue;
-        }
-        else
-        {
-          boost::trim (line); //remove white spaces from start and end
-          if (line.compare("T70:") == 0)
-          {
-            tr_type = 1;
-            row = 0;
-            continue;
-          }
-          else if (line.compare("T50:") == 0)
-          {
-            tr_type = 2;
-            row = 0;
-            continue;
-          }
-          else if (line.compare("T30:") == 0)
-          {
-            tr_type = 3;
-            row = 0;
-            continue;
-          }
-          std::vector<std::string> vst;
-          if (tr_type != 0)
-          {
-            boost::split (vst, line, boost::is_any_of(" "), boost::token_compress_on); 
-            if (vst.size() == 4)
-            {
-              if (tr_type == 1)
-              {
-                T_70 (row,0) = std::stof(vst[0]);
-                T_70 (row,1) = std::stof(vst[1]);
-                T_70 (row,2) = std::stof(vst[2]);
-                T_70 (row,3) = std::stof(vst[3]);
-                ++row;
-              }
-              if (tr_type == 2)
-              {
-                T_50 (row,0) = std::stof(vst[0]);
-                T_50 (row,1) = std::stof(vst[1]);
-                T_50 (row,2) = std::stof(vst[2]);
-                T_50 (row,3) = std::stof(vst[3]);
-                ++row;
-              }
-              if (tr_type == 3)
-              {
-                T_30 (row,0) = std::stof(vst[0]);
-                T_30 (row,1) = std::stof(vst[1]);
-                T_30 (row,2) = std::stof(vst[2]);
-                T_30 (row,3) = std::stof(vst[3]);
-                ++row;
-              }
-            }
-            else
-            {
-              ROS_ERROR("[poses_scanner] Incorrect calibration file, try renunning calibration...");
-              calibration_ = false;
-              break;
-            }
-          }
-        }
-      }
-    }
-    else
-    {
-      ROS_ERROR("[poses_scanner] Cant open calibration file, try rerunning calibration...");
-      calibration_ = false;
-    }
-    */
   }
   else
     ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
@@ -308,18 +233,24 @@ bool poseGrabber::set_turnTable_pos(float pos)
 }
 
 //wrapper function to move lwr
-bool poseGrabber::set_lwr_pose(float radius, float latitude)
+bool poseGrabber::set_lwr_pose(double radius, float latitude)
 {
   lwr_controllers::PoseRPY task;
+  nh.getParam("/poses_scanner/lwr_x", lwr_x);
+  nh.getParam("/poses_scanner/lwr_y", lwr_y);
+  nh.getParam("/poses_scanner/lwr_z", lwr_z);
+  nh.getParam("/poses_scanner/lwr_Roll", lwr_roll);
+  nh.getParam("/poses_scanner/lwr_Pitch", lwr_pitch);
+  nh.getParam("/poses_scanner/lwr_Yaw", lwr_yaw);
   
   //measure centre of the table in world robot frame
   task.id = 0;
-  task.position.x = -0.68;
-  task.position.y =  0 + (radius * cos(latitude*D2R));
-  task.position.z = 0.137 + (radius * sin(latitude*D2R)); 
-  task.orientation.roll = 1.57079 + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground)
-  task.orientation.pitch = 0; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
-  task.orientation.yaw = 0; //this is yaw is in world frame! (zero is looking at the window for right arm)
+  task.position.x = lwr_x;
+  task.position.y =  lwr_y + (radius * cos(latitude*D2R));
+  task.position.z = lwr_z + (radius * sin(latitude*D2R)); 
+  task.orientation.roll = lwr_roll + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground, 0° points at ceiling)
+  task.orientation.pitch = lwr_pitch; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
+  task.orientation.yaw = lwr_yaw; //this is yaw is in world frame! (zero is looking at the window for right arm)
   
   //send the task to the robot
   pub_lwr_.publish(task); 
@@ -341,7 +272,8 @@ float poseGrabber::get_turnTable_pos()
 
 void poseGrabber::center_table()
 {
-  set_lwr_pose(0.8,50);
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
+  set_lwr_pose(lwr_rad,50);
   _proceed_ = false;
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   _viewer_->removeShape("text");
@@ -366,8 +298,9 @@ void poseGrabber::center_table()
 
 void poseGrabber::center_object()
 {
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   _proceed_ = false;
-  set_lwr_pose(0.8,50);
+  set_lwr_pose(lwr_rad,50);
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acq (new pcl::PointCloud<pcl::PointXYZRGBA>);
   _viewer_->removeShape("text");
@@ -384,7 +317,7 @@ void poseGrabber::center_object()
   y_plane.values[1] = 0;
   y_plane.values[2] = 0;
   y_plane.values[3] = 0;
-  Eigen::Matrix4d T_inv = T_50.inverse();
+  Eigen::Matrix4f T_inv = T_50.inverse();
   acquire_scene(acq);
   pcl::transformPointCloud(*acq, *tmp, T_inv);
   _viewer_->addPlane(x_plane,"plane_x");
@@ -413,7 +346,7 @@ void poseGrabber::try_segmentation(int lat)
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acq (new pcl::PointCloud<pcl::PointXYZRGBA>);
   _viewer_->removeShape("text");
   _viewer_->addText("Check segmentation and adjust parameters of corresponding latitude if needed, then press 't' when satisfied", 50,50,18,250,150,150,"seg_t");
-  Eigen::Matrix4d T_inv;
+  Eigen::Matrix4f T_inv;
   if (lat == 70)
     T_inv = T_70.inverse();
   if (lat == 50)
@@ -440,7 +373,7 @@ void poseGrabber::try_segmentation(int lat)
   _viewer_->spinOnce(100);
 }
 
-void poseGrabber::adjust_object()
+void poseGrabber::adjust_object(std::string name)
 {
   float c_pos = get_turnTable_pos();
   if (c_pos != 0)
@@ -454,12 +387,12 @@ void poseGrabber::adjust_object()
       }
     }
   }
-  center_object();
-  set_lwr_pose(0.8,70);
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
+  set_lwr_pose(lwr_rad,70);
   try_segmentation(70);
-  set_lwr_pose(0.8,50);
+  set_lwr_pose(lwr_rad,50);
   try_segmentation(50);
-  set_lwr_pose(0.8,30);
+  set_lwr_pose(lwr_rad,30);
   try_segmentation(30);
 }
 
@@ -662,8 +595,8 @@ bool poseGrabber::acquire_table_transform (int latitude)
   cy = (double)_picked_[1];
   cz = (double)_picked_[2];
   
-  Eigen::Vector3d new_z (nx,ny,nz); //the table normal
-  Eigen::Vector3d vp (0 - cx, 0 - cy, 0 - cz); //viewpoint vector 0 (sensor origin) - table centre. It points "up" the table
+  Eigen::Vector3f new_z (nx,ny,nz); //the table normal
+  Eigen::Vector3f vp (0 - cx, 0 - cy, 0 - cz); //viewpoint vector 0 (sensor origin) - table centre. It points "up" the table
   vp.normalize();
   new_z.normalize();
   if (vp.dot (new_z) < 0 ) //reorient the normal if needed
@@ -673,12 +606,12 @@ bool poseGrabber::acquire_table_transform (int latitude)
   }
   //check if new_z^t dot x is zero, if it is x lays on the table
   double precision = 1e-4;
-  double result = (new_z.transpose() * Eigen::Vector3d::UnitX()); 
-  Eigen::Matrix3d R_kt;
+  double result = (new_z.transpose() * Eigen::Vector3f::UnitX()); 
+  Eigen::Matrix3f R_kt;
   if ( result > -precision && result < precision )
   {
     //we can use the actual x axis, cause it lays on the table
-    Eigen::Vector3d new_y = new_z.cross(Eigen::Vector3d::UnitX());
+    Eigen::Vector3f new_y = new_z.cross(Eigen::Vector3f::UnitX());
     new_y.normalize();
     //compose the rotation matrix
     R_kt << 1, new_y[0], new_z[0],
@@ -689,10 +622,10 @@ bool poseGrabber::acquire_table_transform (int latitude)
   else
   {
     //calculate a new x that lays in null space of new_z transpose
-    Eigen::Vector3d new_x;
+    Eigen::Vector3f new_x;
     //TODO
-    new_x = Eigen::Vector3d::UnitX(); //tmpTODO still using oldx
-    Eigen::Vector3d new_y = new_z.cross(new_x);
+    new_x = Eigen::Vector3f::UnitX(); //tmpTODO still using oldx
+    Eigen::Vector3f new_y = new_z.cross(new_x);
     new_y.normalize();
     //compose the rotation matrix
     R_kt << new_x[0], new_y[0], new_z[0],
@@ -700,8 +633,8 @@ bool poseGrabber::acquire_table_transform (int latitude)
             new_x[2], new_y[2], new_z[2];
     ROS_WARN("using new x axis, result %g",result);
   }
-  Eigen::Vector3d trasl (cx, cy, cz);
-  Eigen::Matrix4d T_kt;
+  Eigen::Vector3f trasl (cx, cy, cz);
+  Eigen::Matrix4f T_kt;
   T_kt << R_kt(0,0), R_kt(0,1), R_kt(0,2), trasl(0),
           R_kt(1,0), R_kt(1,1), R_kt(1,2), trasl(1), 
           R_kt(2,0), R_kt(2,1), R_kt(2,2), trasl(2),
@@ -714,34 +647,14 @@ bool poseGrabber::acquire_table_transform (int latitude)
   if (latitude == 70)
   {
     T_70 = T_kt;
-    //Save transform to disk
-  /*  ofstream trans_file;
-    trans_file.open( (work_dir_.string() +  "/table.transform").c_str() );
-    trans_file << "## Table Transforms (camera to table) saved on " << to_simple_string(timestamp_).c_str() <<std::endl;
-    trans_file << "## <Matrix4d> "<<std::endl;
-    trans_file <<"T70:\n"<< T_70 <<std::endl;
-    trans_file.close();
-    */
   }
   else if (latitude == 50)
   {
     T_50 = T_kt; 
-    //Save transform to disk
-   /* fstream trans_file;
-    trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
-    trans_file <<"T50:\n"<< T_50 <<std::endl; 
-    trans_file.close();
-    */
   }
   else if (latitude == 30)
   {
     T_30 = T_kt; 
-    //Save transform to disk
-    /*fstream trans_file;
-    trans_file.open( (work_dir_.string() +  "/table.transform").c_str(), std::fstream::out | std::fstream::app );
-    trans_file <<"T30:\n"<< T_30; 
-    trans_file.close();
-    */
   }
   else
   {
@@ -749,7 +662,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
     return false;
   }
   //view if transform is correct
-  Eigen::Matrix4d T_inv = T_kt.inverse();
+  Eigen::Matrix4f T_inv = T_kt.inverse();
   pcl::transformPointCloud(*cloud_, *tmp, T_inv);
   _viewer_->addPointCloud(tmp, "final_cloud");
   _viewer_->addCoordinateSystem(0.2);
@@ -768,8 +681,9 @@ bool poseGrabber::acquire_table_transform (int latitude)
 bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scanner_node::table::Response &res)
 {
   center_table();
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   //put lwr at first stop
-  set_lwr_pose(0.8, 70);  
+  set_lwr_pose(lwr_rad, 70);  
 
   // move table to 0 position, if not there already
   float c_pos = get_turnTable_pos();
@@ -792,12 +706,12 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
-  set_lwr_pose(0.8, 50);  
+  set_lwr_pose(lwr_rad, 50);  
   center_table();
   boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal50 = acquire_table_transform(50);
   //last stop
-  set_lwr_pose(0.8, 30);  
+  set_lwr_pose(lwr_rad, 30);  
   center_table();
   boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
@@ -835,7 +749,6 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     ROS_ERROR("[poses_scanner] Calibration is not done yet! Run calibration service before trying to acquire poses! Exiting...");
     return false;
   }
-  adjust_object();
   int lon_pass = req.lon_pass;
   std::string name;
   if (req.objname.compare(0,1,"-") == 0) //check if we wanted flipped object
@@ -845,6 +758,8 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   }
   else
     name = req.objname; 
+  center_object();
+  adjust_object(name);
   //create directory to store poses writes into "~/PoseScanner"
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
@@ -861,10 +776,11 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   _viewer_->removeShape("text");
   //acquisition loops
   //for cycle in latitude 
+  nh.getParam("/poses_scanner/lwr_rad", lwr_rad);
   for (int lat = 70;  lat > 20; lat-=20) //fixed latitude pass (goes to 70, 50 and 30) 
   {
     //move lwr in position  
-    set_lwr_pose(0.8,lat);
+    set_lwr_pose(lwr_rad,lat);
     //and table
     float c_pos = get_turnTable_pos();
     if (c_pos != 0)
@@ -906,42 +822,60 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object (new pcl::PointCloud<pcl::PointXYZRGBA>);
       
-      Eigen::Matrix4d T;
+      //Transforms used
+      Eigen::Matrix4f T_l0k, T_kl0, T_l0li, T_lil0;
+
       if (lat==70)
-        T = T_70.inverse();
+      {
+        T_kl0 = T_70;
+        T_l0k = T_70.inverse();
+      }
       if (lat==50)
-        T = T_50.inverse();
+      {
+        T_kl0 = T_50;
+        T_l0k = T_50.inverse();
+      }
       if (lat==30)
-        T = T_30.inverse();
-        //temporary transform to local frame for easier cropping
-      pcl::transformPointCloud(*cloud_, *temp, T); 
-      extract_object(lat, temp, object);
+      {
+        T_kl0 = T_30;
+        T_l0k = T_30.inverse();
+      }
+        //temporary transform to local frame (li) for easier cropping
+      pcl::transformPointCloud(*cloud_, *temp, T_l0k); 
+      extract_object(lat, temp, object); //temp is in l0
       
-      //save the cloud also in local frame
-      Eigen::AngleAxisd rot (lon*D2R, Eigen::Vector3d::UnitZ() );
+      //save the cloud in local frame (li)
+      Eigen::AngleAxisf rot (lon*D2R, Eigen::Vector3f::UnitZ() );
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_local (new pcl::PointCloud<pcl::PointXYZRGBA>);
-      Eigen::Matrix4d T_lil0;
+      //init matrix as simple rotation around z
       T_lil0 << rot.matrix()(0,0), rot.matrix()(0,1), rot.matrix()(0,2), 0,
                 rot.matrix()(1,0), rot.matrix()(1,1), rot.matrix()(1,2), 0,
                 rot.matrix()(2,0), rot.matrix()(2,1), rot.matrix()(2,2), 0,
                 0,                 0,                 0,                 1;
-      pcl::transformPointCloud(*object, *cloud_local, T_lil0);    
+      T_l0li = T_lil0.inverse();
+      pcl::transformPointCloud(*object, *cloud_local, T_lil0); //now cloud local is in li
+      //save sensor information
+      Eigen::Matrix4f T_sensor; //create one matrix for convinience
+      T_sensor = T_kl0 * T_l0li;
+      //extract quaternion of orientation from it
+      Eigen::Matrix3f R_sensor;
+      R_sensor = T_sensor.topLeftCorner(3,3);
+      Eigen::Quaternionf Q_sensor (R_sensor); //init quaternion from rotation matrix
+      Q_sensor.normalize();
+      Eigen::Vector4f trasl_sensor (T_sensor(0,3), T_sensor(1,3), T_sensor(2,3), 1);
+      //save sensor information in cloud
+      cloud_local->sensor_origin_ = trasl_sensor;
+      cloud_local->sensor_orientation_ = Q_sensor;
+      //now save local cloud
       std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (filename.c_str(), *cloud_local);
-
-      //now transform back to camera frame
-      Eigen::Matrix4d T_inverse;
-      if (lat==70)
-        T_inverse = T_70;
-      if (lat==50)
-        T_inverse = T_50;
-      if (lat==30)
-        T_inverse = T_30;
-
-      pcl::transformPointCloud(*cloud_local, *cloud_, T_inverse ); 
-      //publish pose 
+     
+      //transform cloud back in sensor frame
+      pcl::transformPointCloud(*cloud_local, *temp, T_l0li ); 
+      pcl::transformPointCloud(*temp, *cloud_, T_kl0 ); 
+      //publish pose local
       pub_poses_.publish(*cloud_local); //automatic conversion to rosmsg
-      //save poses on disk
+      //save pose in sensor on disk
       std::string kinectname (current_session_.string() + "/KINECT_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (kinectname.c_str(), *cloud_);
       //also let user view the pose 
