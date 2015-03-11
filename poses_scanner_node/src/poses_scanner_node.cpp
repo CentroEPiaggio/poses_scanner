@@ -611,6 +611,8 @@ bool poseGrabber::acquire_table_transform (int latitude)
   extract.setNegative(true);
   extract.setIndices(inliers);
   extract.filter(*tmp);
+  
+  std::cout<<"points: "<< tmp->points.size()<<std::endl;
 
   _viewer_->removeShape("text");
   _viewer_->addText("Pick the centre of the table (shift click), then press 't' when satisfied", 50,50,18,250,150,150,"pick_text");
@@ -637,24 +639,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   proj.setModelCoefficients (coe);
   proj.setInputCloud(tmp);
   proj.filter(*tmp);
-  //downsample
-  /*
-  pcl::VoxelGrid<pcl::PointXYZRGBA> vg;
-  vg.setInputCloud (tmp);
-  vg.setLeafSize(0.008, 0.008, 0.008);
-  vg.setDownsampleAllData(true);
-  vg.filter (*tmp);
-  */
   
-  /*
-  pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA>::Ptr table_model(new pcl::SampleConsensusModelCircle3D<pcl::PointXYZRGBA> (tmp));
-  pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
-  ransac.setDistanceThreshold (0.08);
-  ransac.setMaxIterations(2000);
-  ransac.computeModel();
-  Eigen::VectorXf coefficients;
-  ransac.getModelCoefficients(coefficients);  
-  */
   //compute another plane model to read its normal this time is the table we seek
   pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA>::Ptr table_model (new pcl::SampleConsensusModelPlane<pcl::PointXYZRGBA> (tmp));
   pcl::RandomSampleConsensus<pcl::PointXYZRGBA> ransac (table_model); //Ransac algorithm
@@ -800,8 +785,10 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
       }
     }
   }
+  std::cout<<"sleep"<<std::endl;
   boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   bool cal70(false), cal50(false), cal30(false);
+  std::cout<<"acquire"<<std::endl;
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
