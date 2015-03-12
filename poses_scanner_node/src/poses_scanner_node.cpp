@@ -890,6 +890,19 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   _viewer_->removeCoordinateSystem();
   _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
   _viewer_->spinOnce(200);
+  float cur_pos = get_turnTable_pos();
+  if (cur_pos != 0)
+  {
+    float step = -cur_pos/360;
+    for (int i=1; i<=360; i++)
+    {
+      if(!set_turnTable_pos(cur_pos + step*i) )
+      {
+        ROS_ERROR("[posesScanner] turnTable communication failed!");
+        return false;
+      }
+    }
+  }
   return true;
 }
 
