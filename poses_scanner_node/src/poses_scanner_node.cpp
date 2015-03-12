@@ -525,8 +525,6 @@ bool poseGrabber::acquire_table_transform (int latitude)
     return false;
   }
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr tmp (new pcl::PointCloud<pcl::PointXYZRGBA>);
-  pcl::copyPointCloud(*cloud_, *tmp);
-  
   //find first plane
   pcl::SACSegmentation<pcl::PointXYZRGBA> seg;
   pcl::PointIndices::Ptr inliers (new pcl::PointIndices);
@@ -535,12 +533,12 @@ bool poseGrabber::acquire_table_transform (int latitude)
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
   seg.setMaxIterations (2000);
-  seg.setDistanceThreshold (0.03);
-  seg.setInputCloud(tmp);
+  seg.setDistanceThreshold (0.025);
+  seg.setInputCloud(cloud_);
   seg.segment(*inliers, *coeff);
   //extract plane and whats on top
   pcl::ExtractIndices<pcl::PointXYZRGBA> extract;
-  extract.setInputCloud(tmp);
+  extract.setInputCloud(cloud_);
   extract.setNegative(true);
   extract.setIndices(inliers);
   extract.filter(*tmp);
@@ -564,7 +562,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   segc.setModelType (pcl::SACMODEL_PLANE);
   segc.setMethodType (pcl::SAC_RANSAC);
   segc.setMaxIterations (2000);
-  segc.setDistanceThreshold (0.02);
+  segc.setDistanceThreshold (0.015);
   segc.setInputCloud(tmp);
   segc.segment(*in, *coe);
   pcl::ProjectInliers<pcl::PointXYZRGBA> proj;
@@ -699,21 +697,19 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
       }
     }
   }
-  std::cout<<"sleep"<<std::endl;
-  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   bool cal70(false), cal50(false), cal30(false);
   std::cout<<"acquire"<<std::endl;
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
   set_lwr_pose(lwr_rad, 50);  
-  center_table();
-  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal50 = acquire_table_transform(50);
   //last stop
   set_lwr_pose(lwr_rad, 30);  
   center_table();
-  boost::this_thread::sleep (boost::posix_time::microseconds (2000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
   if (cal50 && cal70 && cal30)
   {

@@ -6,7 +6,7 @@ project(poses_scanner_node)
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED roscpp std_srvs sensor_msgs pcl_ros pcl_conversions message_generation tf)
-find_package(PCL 1.7 REQUIRED)
+find_package(PCL 1.7.2 REQUIRED)
 find_package(HDF5 REQUIRED)
 
 ## System dependencies are found with CMake's conventions
