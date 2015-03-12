@@ -19,6 +19,9 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(Boost REQUIRED)
 find_package(PCL 1.7.2 REQUIRED)
 
+## Add C++11
+add_definitions(-std=c++11)
+
 
 ## Uncomment this if the package has a setup.py. This macro ensures
 ## modules and global scripts declared therein get installed
@@ -101,8 +104,11 @@ catkin_package(
 # include_directories(include)
 include_directories(
   ${catkin_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
+  ${pcl_INCLUDE_DIRS}
 )
+
+link_directories( ${PCL_LIBRARY_DIRS} )
+add_definitions( ${PCL_DEFINITIONS} )
 
 ## Declare a cpp library
 # add_library(registration_node
@@ -110,16 +116,17 @@ include_directories(
 # )
 
 ## Declare a cpp executable
-# add_executable(registration_node_node src/registration_node_node.cpp)
+add_executable(registration_node src/registration.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(registration_node_node registration_node_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(registration_node_node
-#   ${catkin_LIBRARIES}
-# )
+target_link_libraries(registration_node
+   ${catkin_LIBRARIES}
+   ${PCL_LIBRARIES}
+)
 
 #############
 ## Install ##
