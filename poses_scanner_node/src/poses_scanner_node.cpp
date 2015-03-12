@@ -249,7 +249,7 @@ bool poseGrabber::set_lwr_pose(double radius, float latitude)
   task.position.y =  lwr_y + (radius * cos(latitude*D2R));
   task.position.z = lwr_z + (radius * sin(latitude*D2R)); 
   task.orientation.roll = lwr_roll + (latitude*D2R); //this roll is in world frame! (it acts as a pitch for EE... 90° parallell to the ground, 0° points at ceiling)
-  task.orientation.pitch = lwr_pitch; //this pitch is in world frame! (it acts as a roll for EE... keeping it a zero)
+  task.orientation.pitch = lwr_pitch; //this pitch is in world frame! (it acts as a roll for EE... )
   task.orientation.yaw = lwr_yaw; //this is yaw is in world frame! (zero is looking at the window for right arm)
   
   //send the task to the robot
@@ -533,7 +533,7 @@ bool poseGrabber::acquire_table_transform (int latitude)
   seg.setModelType (pcl::SACMODEL_PLANE);
   seg.setMethodType (pcl::SAC_RANSAC);
   seg.setMaxIterations (2000);
-  seg.setDistanceThreshold (0.025);
+  seg.setDistanceThreshold (0.035);
   seg.setInputCloud(cloud_);
   seg.segment(*inliers, *coeff);
   //extract plane and whats on top
@@ -543,8 +543,6 @@ bool poseGrabber::acquire_table_transform (int latitude)
   extract.setIndices(inliers);
   extract.filter(*tmp);
   
-  std::cout<<"points: "<< tmp->points.size()<<std::endl;
-
   _viewer_->removeShape("text");
   _viewer_->addText("Pick the centre of the table (shift click), then press 't' when satisfied", 50,50,18,250,150,150,"pick_text");
   _viewer_->addPointCloud(tmp,"pick_cloud");
@@ -699,7 +697,6 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   }
   boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   bool cal70(false), cal50(false), cal30(false);
-  std::cout<<"acquire"<<std::endl;
   cal70 = acquire_table_transform(70);
   
   //put lwr at second stop
@@ -708,7 +705,6 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   cal50 = acquire_table_transform(50);
   //last stop
   set_lwr_pose(lwr_rad, 30);  
-  center_table();
   boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
   if (cal50 && cal70 && cal30)
