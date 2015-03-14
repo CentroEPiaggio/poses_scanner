@@ -59,11 +59,11 @@ add_definitions(-std=c++11)
 # )
 
 ## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
+add_service_files(
+  FILES
+  set_poses.srv
+  execute.srv
+)
 
 ## Generate actions in the 'action' folder
 # add_action_files(
@@ -73,10 +73,10 @@ add_definitions(-std=c++11)
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   sensor_msgs#   std_msgs
-# )
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
 
 ###################################
 ## catkin specific configuration ##
@@ -90,8 +90,8 @@ add_definitions(-std=c++11)
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES registration_node
-#  CATKIN_DEPENDS message_generation pcl_conversions pcl_ros roscpp sensor_msgs std_msgs std_srvs
-  DEPENDS system_lib message_runtime
+  CATKIN_DEPENDS message_runtime
+  DEPENDS system_lib 
 )
 
 ###########
