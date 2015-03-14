@@ -6,7 +6,6 @@ project(registration_node)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   message_generation
-  message_runtime
   pcl_conversions
   pcl_ros
   roscpp
