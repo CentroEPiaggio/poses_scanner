@@ -6,7 +6,6 @@ project(registration_node)
 ## is used, also find other catkin packages
 find_package(catkin REQUIRED COMPONENTS
   message_generation
-  message_runtime
   pcl_conversions
   pcl_ros
   roscpp
@@ -18,6 +17,9 @@ find_package(catkin REQUIRED COMPONENTS
 ## System dependencies are found with CMake's conventions
 find_package(Boost REQUIRED)
 find_package(PCL 1.7.2 REQUIRED)
+
+## Add C++11
+add_definitions(-std=c++11)
 
 
 ## Uncomment this if the package has a setup.py. This macro ensures
@@ -57,11 +59,11 @@ find_package(PCL 1.7.2 REQUIRED)
 # )
 
 ## Generate services in the 'srv' folder
-# add_service_files(
-#   FILES
-#   Service1.srv
-#   Service2.srv
-# )
+add_service_files(
+  FILES
+  set_poses.srv
+  execute.srv
+)
 
 ## Generate actions in the 'action' folder
 # add_action_files(
@@ -71,10 +73,10 @@ find_package(PCL 1.7.2 REQUIRED)
 # )
 
 ## Generate added messages and services with any dependencies listed here
-# generate_messages(
-#   DEPENDENCIES
-#   sensor_msgs#   std_msgs
-# )
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
 
 ###################################
 ## catkin specific configuration ##
@@ -88,8 +90,8 @@ find_package(PCL 1.7.2 REQUIRED)
 catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES registration_node
-#  CATKIN_DEPENDS message_generation pcl_conversions pcl_ros roscpp sensor_msgs std_msgs std_srvs
-  DEPENDS system_lib message_runtime
+  CATKIN_DEPENDS message_runtime
+  DEPENDS system_lib 
 )
 
 ###########
@@ -101,8 +103,11 @@ catkin_package(
 # include_directories(include)
 include_directories(
   ${catkin_INCLUDE_DIRS}
-  ${PCL_INCLUDE_DIRS}
+  ${pcl_INCLUDE_DIRS}
 )
+
+link_directories( ${PCL_LIBRARY_DIRS} )
+add_definitions( ${PCL_DEFINITIONS} )
 
 ## Declare a cpp library
 # add_library(registration_node
@@ -110,16 +115,17 @@ include_directories(
 # )
 
 ## Declare a cpp executable
-# add_executable(registration_node_node src/registration_node_node.cpp)
+add_executable(registration_node src/registration.cpp)
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(registration_node_node registration_node_generate_messages_cpp)
 
 ## Specify libraries to link a library or executable target against
-# target_link_libraries(registration_node_node
-#   ${catkin_LIBRARIES}
-# )
+target_link_libraries(registration_node
+   ${catkin_LIBRARIES}
+   ${PCL_LIBRARIES}
+)
 
 #############
 ## Install ##

@@ -1,0 +1,6 @@
+<launch>
+  
+	<!-- launch node  -->
+  <node name="registration_node" pkg="registration_node" type="registration_node" output="screen" />
+
+</launch>
