@@ -13,11 +13,11 @@
 #include "registration_node/execute.h"
 
 //PCL headers
-#include <pcl/registration/lum.h>
-#include <pcl/registration/correspondence_estimation.h>
+//#include <pcl/registration/lum.h>
+//#include <pcl/registration/correspondence_estimation.h>
 #include <pcl/registration/icp.h>
 #include <pcl/filters/voxel_grid.h>
-#include <pcl/search/kdtree.h>
+//#include <pcl/search/kdtree.h>
 #include <pcl/common/eigen.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -57,7 +57,8 @@ class register_poses
     PC::Ptr concatenated_original;
     PC::Ptr concatenated_registered;
 
-    pcl::registration::LUM<PT> lum;
+    pcl::IterativeClosestPoint<PT,PT> icp;
+    //pcl::registration::LUM<PT> lum;
     bool initialized;
 };
 
@@ -138,42 +139,41 @@ bool register_poses::setPoses (registration_node::set_poses::Request& req, regis
     }
     ++i;
   }
-  pcl::registration::CorrespondenceEstimation<PT,PT> corr;
-  i=0;
-  for (std::vector<pose>::const_iterator it(original_poses.begin()); it !=original_poses.end(); ++it, ++i)
-  {   
-    lum.addPointCloud(it->second.makeShared());
-    if (it == original_poses.begin())
-    {//skip first cloud
-      continue;
-    }
-    //save correspondences from i-th cloud to first one
-    corr.setInputTarget(original_poses.begin()->second.makeShared());
-    corr.setInputSource(it->second.makeShared());
-    pcl::CorrespondencesPtr i_to_zero (new pcl::Correspondences);
-    corr.determineCorrespondences(*i_to_zero, 0.05);
-    lum.setCorrespondences(i, 0, i_to_zero);
-    //save correspondences from frist cloud to i-th cloud
-    corr.setInputTarget(it->second.makeShared());
-    corr.setInputSource(original_poses.begin()->second.makeShared());
-    pcl::CorrespondencesPtr zero_to_i (new pcl::Correspondences);
-    corr.determineCorrespondences(*zero_to_i, 0.05);
-    lum.setCorrespondences(0, i, zero_to_i);
-    //save correspondences to and from i-th cloud and (i-1)-th cloud
-    corr.setInputTarget(it->second.makeShared());
-    corr.setInputSource((it-1)->second.makeShared());
-    pcl::CorrespondencesPtr precedent_to_actual (new pcl::Correspondences);
-    corr.determineCorrespondences(*precedent_to_actual, 0.05);
-    lum.setCorrespondences(i-1, i, precedent_to_actual);
-    
-    corr.setInputTarget((it-1)->second.makeShared());
-    corr.setInputSource(it->second.makeShared());
-    pcl::CorrespondencesPtr actual_to_precedent (new pcl::Correspondences);
-    corr.determineCorrespondences(*actual_to_precedent, 0.05);
-    lum.setCorrespondences(i, i-1, actual_to_precedent);
-  }
-  lum.setMaxIterations (500);
-  lum.setConvergenceThreshold (0.0);
+ // i=0;
+ // for (std::vector<pose>::const_iterator it(original_poses.begin()); it !=original_poses.end(); ++it, ++i)
+ // {   
+ //   lum.addPointCloud(it->second.makeShared());
+ //   if (it == original_poses.begin())
+ //   {//skip first cloud
+ //     continue;
+ //   }
+ //   //save correspondences from i-th cloud to first one
+ //   corr.setInputTarget(original_poses.begin()->second.makeShared());
+ //   corr.setInputSource(it->second.makeShared());
+ //   pcl::CorrespondencesPtr i_to_zero (new pcl::Correspondences);
+ //   corr.determineCorrespondences(*i_to_zero, 0.05);
+ //   lum.setCorrespondences(i, 0, i_to_zero);
+ //   //save correspondences from frist cloud to i-th cloud
+ //   corr.setInputTarget(it->second.makeShared());
+ //   corr.setInputSource(original_poses.begin()->second.makeShared());
+ //   pcl::CorrespondencesPtr zero_to_i (new pcl::Correspondences);
+ //   corr.determineCorrespondences(*zero_to_i, 0.05);
+ //   lum.setCorrespondences(0, i, zero_to_i);
+ //   //save correspondences to and from i-th cloud and (i-1)-th cloud
+ //   corr.setInputTarget(it->second.makeShared());
+ //   corr.setInputSource((it-1)->second.makeShared());
+ //   pcl::CorrespondencesPtr precedent_to_actual (new pcl::Correspondences);
+ //   corr.determineCorrespondences(*precedent_to_actual, 0.05);
+ //   lum.setCorrespondences(i-1, i, precedent_to_actual);
+ //   
+ //   corr.setInputTarget((it-1)->second.makeShared());
+ //   corr.setInputSource(it->second.makeShared());
+ //   pcl::CorrespondencesPtr actual_to_precedent (new pcl::Correspondences);
+ //   corr.determineCorrespondences(*actual_to_precedent, 0.05);
+ //   lum.setCorrespondences(i, i-1, actual_to_precedent);
+ // }
+ // lum.setMaxIterations (500);
+ // lum.setConvergenceThreshold (0.0);
   ROS_INFO("[Registration_Node] %d poses loaded from %s.", (int)original_poses.size(), req.directory.c_str());
   initialized = true;
   return true;
@@ -187,11 +187,9 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     return false;
   }
   ROS_WARN("[Registration_Node] Starting Registration process, PLEASE NOTE THAT IT COULD TAKE A LONG TIME...");
-  lum.compute(); //perform registration
-  pcl::VoxelGrid<PT> vg;
-  *concatenated_registered = *lum.getConcatenatedCloud();
+  //lum.compute(); //perform registration
+  //*concatenated_registered = *lum.getConcatenatedCloud();
   //ICP
-  pcl::IterativeClosestPoint<PT,PT> icp;
   icp.setTransformationEpsilon(1e-6);
   icp.setEuclideanFitnessEpsilon(1e-5);
   icp.setMaximumIterations(1000);
@@ -210,10 +208,12 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     reg.first = it->first;
     std::cout<<"Registering "<<it->first.c_str()<<" ...\t ["<<i<<"/"<<original_poses.size()<<"]\r" ;
     icp.align(reg.second);
+    //TODO save new transformation in cloud sensor origin
+
     registered_poses.push_back(reg);
   }
+  pcl::VoxelGrid<PT> vg;
   std::cout<<std::endl<<std::endl;
-  PC concatenated_reg_icp;
   for (int j=0; j<registered_poses.size(); ++j)
     concatenated_reg_icp += registered_poses[j].second;
 
