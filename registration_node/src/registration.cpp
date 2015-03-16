@@ -14,6 +14,8 @@
 
 //PCL headers
 #include <pcl/registration/lum.h>
+#include <pcl/registration/correspondence_estimation.h>
+#include <pcl/search/kdtree.h>
 #include <pcl/common/eigen.h>
 #include <pcl/io/pcd_io.h>
 #include <pcl/point_cloud.h>
@@ -109,9 +111,23 @@ bool register_poses::setPoses (registration_node::set_poses::Request& req, regis
     }
     ++i;
   }
-  for (std::vector<pose>::const_iterator it(original_poses.begin()); it !=original_poses.end(); ++it)
+  pcl::registration::CorrespondenceEstimation<PT,PT> corr;
+  i=0;
+  for (std::vector<pose>::const_iterator it(original_poses.begin()); it !=original_poses.end(); ++it, ++i)
   {   
     lum.addPointCloud(it->second.makeShared());
+    if (it == original_poses.begin())
+    {//add first cloud the reference
+      corr.setInputTarget(it->second.makeShared());
+      continue;
+    }
+    else
+    { 
+      corr.setInputSource(it->second.makeShared());
+      pcl::CorrespondencesPtr i_to_zero (new pcl::Correspondences);
+      corr.determineCorrespondences(*i_to_zero, 0.1);
+      lum.setCorrespondences(i, 0, i_to_zero);
+    }
   }
   ROS_INFO("[Registration_Node] %d poses loaded from %s.", (int)original_poses.size(), req.directory.c_str());
 }

@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 2.8.3)
 project(registration_node)
 
+#force pcl 1.7.2
+set (PCL_DIR "/usr/local/share/pcl-1.7/PCLConfig.cmake")
+
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
@@ -91,7 +94,7 @@ catkin_package(
 #  INCLUDE_DIRS include
 #  LIBRARIES registration_node
   CATKIN_DEPENDS message_runtime
-  DEPENDS system_lib 
+  DEPENDS system_lib PCL 
 )
 
 ###########
@@ -100,12 +103,9 @@ catkin_package(
 
 ## Specify additional locations of header files
 ## Your package locations should be listed before other locations
-# include_directories(include)
-include_directories(
-  ${catkin_INCLUDE_DIRS}
-  ${pcl_INCLUDE_DIRS}
-)
-
+# include_directories(include
+include_directories(BEFORE ${PCL_INCLUDE_DIRS} )
+include_directories( ${catkin_INCLUDE_DIRS} )
 link_directories( ${PCL_LIBRARY_DIRS} )
 add_definitions( ${PCL_DEFINITIONS} )
 
@@ -123,8 +123,8 @@ add_executable(registration_node src/registration.cpp)
 
 ## Specify libraries to link a library or executable target against
 target_link_libraries(registration_node
-   ${catkin_LIBRARIES}
    ${PCL_LIBRARIES}
+   ${catkin_LIBRARIES}
 )
 
 #############
