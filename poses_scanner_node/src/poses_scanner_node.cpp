@@ -846,7 +846,12 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
                 0,                 0,                 0,                 1;
       T_l0li = T_lil0.inverse();
       pcl::transformPointCloud(*object, *cloud_local, T_lil0); //now cloud local is in li
-      //save sensor information
+      
+      //transform cloud back in sensor frame
+      pcl::transformPointCloud(*cloud_local, *temp, T_l0li ); 
+      pcl::transformPointCloud(*temp, *cloud_, T_kl0 );
+      
+      //get sensor information
       Eigen::Matrix4f T_sensor; //create one matrix for convinience
       T_sensor = T_kl0 * T_l0li;
       //extract quaternion of orientation from it
@@ -855,25 +860,23 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       Eigen::Quaternionf Q_sensor (R_sensor); //init quaternion from rotation matrix
       Q_sensor.normalize();
       Eigen::Vector4f trasl_sensor (T_sensor(0,3), T_sensor(1,3), T_sensor(2,3), 1);
-      //save sensor information in cloud
+      //save sensor information in cloud local
       cloud_local->sensor_origin_ = trasl_sensor;
       cloud_local->sensor_orientation_ = Q_sensor;
       //now save local cloud
       std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (filename.c_str(), *cloud_local);
-     
-      //transform cloud back in sensor frame
-      pcl::transformPointCloud(*cloud_local, *temp, T_l0li ); 
-      pcl::transformPointCloud(*temp, *cloud_, T_kl0 ); 
-      //publish pose local
+      //publish local pose
       pub_poses_.publish(*cloud_local); //automatic conversion to rosmsg
-      //save pose in sensor on disk
+      
+      //save pose in sensor(kinect) on disk
       std::string kinectname (current_session_.string() + "/KINECT_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (kinectname.c_str(), *cloud_);
-      //also let user view the pose 
+      
+      //also let user view the local pose 
       _viewer_->updatePointCloud(cloud_local,"pose");
       _viewer_->spinOnce(300);
-      //move table
+      //move turntable
       for (int t=1; t<=lon_pass; ++t)
       {//for table steps: 1 degree
         if (lon+t >= 360)
