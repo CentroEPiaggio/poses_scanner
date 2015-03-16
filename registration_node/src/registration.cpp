@@ -49,6 +49,8 @@ class register_poses
     
     std::vector<pose> original_poses;
     std::vector<pose> registered_poses;
+
+    pcl::registration::LUM<PT> lum;
 };
 
 register_poses::register_poses()
@@ -106,6 +108,10 @@ bool register_poses::setPoses (registration_node::set_poses::Request& req, regis
       original_poses.push_back(tmp);
     }
     ++i;
+  }
+  for (std::vector<pose>::const_iterator it(original_poses.begin()); it !=original_poses.end(); ++it)
+  {   
+    lum.addPointCloud(it->second.makeShared());
   }
   ROS_INFO("[Registration_Node] %d poses loaded from %s.", (int)original_poses.size(), req.directory.c_str());
 }
