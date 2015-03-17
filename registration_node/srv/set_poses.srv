@@ -1,4 +1,4 @@
-string directory
-string reference_pose
+string pose_dir
 ---
+bool success
 
