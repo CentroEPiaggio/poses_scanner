@@ -275,8 +275,26 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     reg.first = it->first;
     std::cout<<"Registering "<<it->first.c_str()<<" ...\t ["<<i<<"/"<<original_poses.size()<<"]\r" ;
     icp.align(reg.second);
-    //TODO save new transformation in cloud sensor origin
-
+    //save new transformation in cloud sensor origin/orientation
+    Eigen::Vector4f t_kli; 
+    t_kli = it->second.sensor_origin_;
+    Eigen::Matrix3f R_kli; 
+    R_kli = it->second.sensor_orientation_;
+    Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
+    T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
+             R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
+             R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
+             0,      0,      0,      1;
+    T_rli = icp.getFinalTransformation();
+    T_lir = T_rli.inverse();
+    T_kr = T_kli * T_lir;
+    Eigen::Matrix3f R_kr;
+    R_kr = T_kr.topLeftCorner(3,3);
+    Eigen::Quaternionf Q_kr (R_kr);
+    Q_kr.normalize();
+    Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
+    reg.second.sensor_origin_ = t_kr;
+    reg.second.sensor_orientation_ = Q_kr;
     registered_poses.push_back(reg);
   }
 //  viewer.stopDisplay();
