@@ -5,7 +5,7 @@ project(poses_scanner_node)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
-find_package(catkin REQUIRED roscpp std_srvs sensor_msgs pcl_ros pcl_conversions message_generation tf)
+find_package(catkin REQUIRED roscpp rospy dynamic_reconfigure std_srvs sensor_msgs pcl_ros pcl_conversions message_generation tf)
 find_package(PCL 1.7.2 REQUIRED)
 find_package(HDF5 REQUIRED)
 
@@ -51,6 +51,12 @@ add_definitions(-std=c++11)
 #   Message2.msg
 # )
 
+#add dynamic reconfigure gui
+generate_dynamic_reconfigure_options(
+  cfg/poses_scanner.cfg
+  )
+
+
 ## Generate services in the 'srv' folder
 add_service_files(
   FILES
@@ -69,6 +75,7 @@ add_service_files(
 generate_messages(
   DEPENDENCIES
   std_msgs  # Or other packages containing msgs
+  dynamic_reconfigure
 )
 
 ###################################
@@ -115,6 +122,7 @@ add_executable(poses_scanner_node
 ## as an example, message headers may need to be generated before nodes
 add_dependencies(poses_scanner_node 
 	poses_scanner_node_generate_messages_cpp
+  poses_scanner_node_gencfg
 	)
 
 ## Specify libraries to link a library or executable target against

@@ -7,6 +7,7 @@
 #include <sensor_msgs/PointCloud2.h>
 #include <sensor_msgs/point_cloud_conversion.h>
 #include <pcl_conversions/pcl_conversions.h>
+#include <dynamic_reconfigure/server.h>
 
 // PCL headers
 #include <pcl/common/eigen.h>
@@ -35,6 +36,7 @@
 #include "turn_table_interface_node/getPos.h"
 #include "scene_filter_node/acquire_scene.h"
 #include "lwr_controllers/PoseRPY.h"
+#include "poses_scanner_node/poses_scannerConfig.h"
 
 //general utilities
 #include <cmath>
@@ -96,9 +98,14 @@ class poseGrabber
     ros::ServiceServer srv_acquire_, srv_table_;
     ros::Publisher pub_poses_;
     ros::Publisher pub_lwr_;
+    //dynamic reconfigure server
+    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig> srv_dyn_;
+    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig>::CallbackType callback;
     //service callback
     bool acquirePoses(poses_scanner_node::acquire::Request& req, poses_scanner_node::acquire::Response& res);
     bool calibrate(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
+    //callback for dynamic reconfigure  
+    void reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level);
 
     //method to move turn table
     bool set_turnTable_pos(float pos);
@@ -127,13 +134,18 @@ class poseGrabber
 
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud_;
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene_;
-    bool calibration_, segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30;
+    bool calibration_;     
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
     boost::filesystem::path current_session_;
+    //Variables to store parameters
+    bool segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30, outlier_70, outlier_50, outlier_30;
     double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
+    double clus_tol_70, clus_tol_50, clus_tol_30, out_rad_70, out_rad_50, out_rad_30;
     double lwr_x, lwr_y, lwr_z, lwr_roll, lwr_pitch, lwr_yaw, lwr_rad;
-    int rad_neigh_70, rad_neigh_50, rad_neigh_30;
+    int out_neigh_70, out_neigh_50, out_neigh_30, clus_min_70, clus_min_50, clus_min_30;
+    
+    
     Eigen::Matrix4f T_70, T_50, T_30; //transforms from camera to table
 };
 
@@ -144,6 +156,9 @@ poseGrabber::poseGrabber()
   //service callbacks
   srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
   srv_table_ = nh.advertiseService("calibrate", &poseGrabber::calibrate, this);
+  //bind callback for dynamic reconfigure
+  callback = boost::bind(&poseGrabber::reconfigure, this, _1, _2);
+  srv_dyn_.setCallback(callback);
   //advertise acquired poses
   pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
   //publish to lwr controller
@@ -158,28 +173,6 @@ poseGrabber::poseGrabber()
   work_dir_ = (home + "/PoseScanner");
   current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
   boost::filesystem::path cal_file  (work_dir_.string() + "/transforms.h5");
-  nh.param<bool>("/poses_scanner/segment_70", segment_70, "true");
-  nh.param<bool>("/poses_scanner/segment_50", segment_50, "true");
-  nh.param<bool>("/poses_scanner/segment_30", segment_30, "true");
-  nh.param<bool>("/poses_scanner/clustering_70", clustering_70, "false");
-  nh.param<bool>("/poses_scanner/clustering_50", clustering_50, "false");
-  nh.param<bool>("/poses_scanner/clustering_30", clustering_30, "false");
-  nh.param<double>("/poses_scanner/zmin_70", zmin_70, -0.003);
-  nh.param<double>("/poses_scanner/zmin_50", zmin_50, -0.003);
-  nh.param<double>("/poses_scanner/zmin_30", zmin_30, -0.003);
-  nh.param<double>("/poses_scanner/seg_tol_70", seg_tol_70, 0.01);
-  nh.param<double>("/poses_scanner/seg_tol_50", seg_tol_50, 0.01);
-  nh.param<double>("/poses_scanner/seg_tol_30", seg_tol_30, 0.01);
-  nh.param<int>("/poses_scanner/rad_neigh_70", rad_neigh_70, 5);
-  nh.param<int>("/poses_scanner/rad_neigh_50", rad_neigh_50, 5);
-  nh.param<int>("/poses_scanner/rad_neigh_30", rad_neigh_30, 5);
-  nh.param<double>("/poses_scanner/lwr_x", lwr_x, -0.65);
-  nh.param<double>("/poses_scanner/lwr_y", lwr_y, 0);
-  nh.param<double>("/poses_scanner/lwr_z", lwr_z, 0.13);
-  nh.param<double>("/poses_scanner/lwr_Roll", lwr_roll, 1.57079);
-  nh.param<double>("/poses_scanner/lwr_Pitch", lwr_pitch, 0);
-  nh.param<double>("/poses_scanner/lwr_Yaw", lwr_yaw, 0);
-  nh.param<double>("/poses_scanner/lwr_rad", lwr_rad, 0.8);
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
     flann::Matrix<float> transf;
@@ -199,6 +192,100 @@ poseGrabber::poseGrabber()
   }
   else
     ROS_WARN("[poses_scanner] Calibration is not done yet, run calibration service before trying to acquire poses!");
+  //Load default values of parameters
+  nh.param<double>("/poses_scanner/zmin_70", zmin_70, -0.003);
+  nh.param<double>("/poses_scanner/zmin_50", zmin_50, -0.003);
+  nh.param<double>("/poses_scanner/zmin_30", zmin_30, -0.003);
+  nh.param<bool>("/poses_scanner/segment_70", segment_70, "true");
+  nh.param<bool>("/poses_scanner/segment_50", segment_50, "true");
+  nh.param<bool>("/poses_scanner/segment_30", segment_30, "true");
+  nh.param<double>("/poses_scanner/seg_tol_70", seg_tol_70, 0.01);
+  nh.param<double>("/poses_scanner/seg_tol_50", seg_tol_50, 0.01);
+  nh.param<double>("/poses_scanner/seg_tol_30", seg_tol_30, 0.01);
+  nh.param<bool>("/poses_scanner/outlier_removal_70", outlier_70, "true");
+  nh.param<bool>("/poses_scanner/outlier_removal_50", outlier_50, "true");
+  nh.param<bool>("/poses_scanner/outlier_removal_30", outlier_30, "true");
+  nh.param<double>("/poses_scanner/radius_search_70", out_rad_70, 0.01);
+  nh.param<double>("/poses_scanner/radius_search_50", out_rad_50, 0.01);
+  nh.param<double>("/poses_scanner/radius_search_30", out_rad_30, 0.01);
+  nh.param<int>("/poses_scanner/neighbors_70", out_neigh_70, 5);
+  nh.param<int>("/poses_scanner/neighbors_50", out_neigh_50, 5);
+  nh.param<int>("/poses_scanner/neighbors_30", out_neigh_30, 5);
+  nh.param<bool>("/poses_scanner/clustering_70", clustering_70, "false");
+  nh.param<bool>("/poses_scanner/clustering_50", clustering_50, "false");
+  nh.param<bool>("/poses_scanner/clustering_30", clustering_30, "false");
+  nh.param<double>("/poses_scanner/clus_tol_70", clus_tol_70, 0.01);
+  nh.param<double>("/poses_scanner/clus_tol_50", clus_tol_50, 0.01);
+  nh.param<double>("/poses_scanner/clus_tol_30", clus_tol_30, 0.01);
+  nh.param<int>("/poses_scanner/clus_min_70", clus_min_70, 5);
+  nh.param<int>("/poses_scanner/clus_min_50", clus_min_50, 5);
+  nh.param<int>("/poses_scanner/clus_min_30", clus_min_30, 5);
+  nh.param<double>("/poses_scanner/lwr_x", lwr_x, -0.65);
+  nh.param<double>("/poses_scanner/lwr_y", lwr_y, 0);
+  nh.param<double>("/poses_scanner/lwr_z", lwr_z, 0.13);
+  nh.param<double>("/poses_scanner/lwr_Roll", lwr_roll, 1.57079);
+  nh.param<double>("/poses_scanner/lwr_Pitch", lwr_pitch, 0);
+  nh.param<double>("/poses_scanner/lwr_Yaw", lwr_yaw, 0);
+  nh.param<double>("/poses_scanner/lwr_rad", lwr_rad, 0.8);
+}
+//dynamic reconfigure callback  
+void poseGrabber::reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level)
+{
+  zmin_70 = config.zmin_70;
+  zmin_50 = config.zmin_50;
+  zmin_30 = config.zmin_30;
+  segment_70 = config.segment_70;
+  segment_50 = config.segment_50;
+  segment_30 = config.segment_30;
+  seg_tol_70 = config.tolerance_70;
+  seg_tol_50 = config.tolerance_50;
+  seg_tol_30 = config.tolerance_30;
+  outlier_70 = config.outlier_removal_70;
+  outlier_50 = config.outlier_removal_50;
+  outlier_30 = config.outlier_removal_30;
+  out_rad_70 = config.radius_search_70;
+  out_rad_50 = config.radius_search_50;
+  out_rad_30 = config.radius_search_30;
+  out_neigh_70 = config.neighbors_70;
+  out_neigh_50 = config.neighbors_50;
+  out_neigh_30 = config.neighbors_30;
+  clustering_70 = config.clustering_70;
+  clustering_50 = config.clustering_50;
+  clustering_30 = config.clustering_30;
+  clus_tol_70 = config.clus_tolerance_70;
+  clus_tol_50 = config.clus_tolerance_50;
+  clus_tol_30 = config.clus_tolerance_30;
+  clus_min_70 = config.min_points_70;
+  clus_min_50 = config.min_points_50;
+  clus_min_30 = config.min_points_30;
+  //update parameters serves also
+  nh.setParam("/poses_scanner/zmin_70", zmin_70);
+  nh.setParam("/poses_scanner/zmin_50", zmin_50);
+  nh.setParam("/poses_scanner/zmin_30", zmin_30);
+  nh.setParam("/poses_scanner/segment_70", segment_70);
+  nh.setParam("/poses_scanner/segment_50", segment_50);
+  nh.setParam("/poses_scanner/segment_30", segment_30);
+  nh.setParam("/poses_scanner/seg_tol_70", seg_tol_70);
+  nh.setParam("/poses_scanner/seg_tol_50", seg_tol_50);
+  nh.setParam("/poses_scanner/seg_tol_30", seg_tol_30);
+  nh.setParam("/poses_scanner/outlier_removal_70", outlier_70);
+  nh.setParam("/poses_scanner/outlier_removal_50", outlier_50);
+  nh.setParam("/poses_scanner/outlier_removal_30", outlier_30);
+  nh.setParam("/poses_scanner/radius_search_70", out_rad_70);
+  nh.setParam("/poses_scanner/radius_search_50", out_rad_50);
+  nh.setParam("/poses_scanner/radius_search_30", out_rad_30);
+  nh.setParam("/poses_scanner/neighbors_70", out_neigh_70);
+  nh.setParam("/poses_scanner/neighbors_50", out_neigh_50);
+  nh.setParam("/poses_scanner/neighbors_30", out_neigh_30);
+  nh.setParam("/poses_scanner/clustering_70", clustering_70);
+  nh.setParam("/poses_scanner/clustering_50", clustering_50);
+  nh.setParam("/poses_scanner/clustering_30", clustering_30);
+  nh.setParam("/poses_scanner/clus_tol_70", clus_tol_70);
+  nh.setParam("/poses_scanner/clus_tol_50", clus_tol_50);
+  nh.setParam("/poses_scanner/clus_tol_30", clus_tol_30);
+  nh.setParam("/poses_scanner/clus_min_70", clus_min_70);
+  nh.setParam("/poses_scanner/clus_min_50", clus_min_50);
+  nh.setParam("/poses_scanner/clus_min_30", clus_min_30);
 }
 
 //wrapper function to grab a cloud
@@ -398,47 +485,44 @@ void poseGrabber::adjust_object(std::string name)
 
 void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object)
 {
-  bool segment,clustering;
-  double zmin,seg_tol;
-  int rad_neigh;
+  bool segment,clustering, filter;
+  double zmin,seg_tol,clus_tol, fil_rad;
+  int fil_neigh, clus_min;
   if (lat==70)
   {
-    nh.getParam("/poses_scanner/zmin_70", zmin_70);
-    nh.getParam("/poses_scanner/segment_70", segment_70);
-    nh.getParam("/poses_scanner/clustering_70", clustering_70);
-    nh.getParam("/poses_scanner/seg_tol_70", seg_tol_70);
-    nh.getParam("/poses_scanner/rad_neigh_70", rad_neigh_70);
     segment = segment_70;
     clustering = clustering_70;
     zmin = zmin_70;
     seg_tol = seg_tol_70;
-    rad_neigh = rad_neigh_70;
+    fil_neigh = out_neigh_70;
+    filter = outlier_70;
+    fil_rad = out_rad_70;
+    clus_tol = clus_tol_70;
+    clus_min = clus_min_70;
   }
   if (lat==50)
   {
-    nh.getParam("/poses_scanner/zmin_50", zmin_50);
-    nh.getParam("/poses_scanner/segment_50", segment_50);
-    nh.getParam("/poses_scanner/clustering_50", clustering_50);
-    nh.getParam("/poses_scanner/seg_tol_50", seg_tol_50);
-    nh.getParam("/poses_scanner/rad_neigh_50", rad_neigh_50);
     segment = segment_50;
     clustering = clustering_50;
     zmin = zmin_50;
     seg_tol = seg_tol_50;
-    rad_neigh = rad_neigh_50;
+    fil_neigh = out_neigh_50;
+    filter = outlier_50;
+    fil_rad = out_rad_50;
+    clus_tol = clus_tol_50;
+    clus_min = clus_min_50;
   }
   if (lat==30)
   {
-    nh.getParam("/poses_scanner/zmin_30", zmin_30);
-    nh.getParam("/poses_scanner/segment_30", segment_30);
-    nh.getParam("/poses_scanner/clustering_30", clustering_30);
-    nh.getParam("/poses_scanner/seg_tol_30", seg_tol_30);
-    nh.getParam("/poses_scanner/rad_neigh_30", rad_neigh_30);
     segment = segment_30;
     clustering = clustering_30;
     zmin = zmin_30;
     seg_tol = seg_tol_30;
-    rad_neigh = rad_neigh_30;
+    fil_neigh = out_neigh_30;
+    filter = outlier_30;
+    fil_rad = out_rad_30;
+    clus_tol = clus_tol_30;
+    clus_min = clus_min_30;
   }
   //Cropping z
   pcl::PassThrough<pcl::PointXYZRGBA> pt;
@@ -476,26 +560,30 @@ void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Pt
     exi.setIndices(table_inliers);
     exi.filter(*scene);
   }
-  //Radius outlier removal (if a point has not at least 4 neighbors in 1cm radius it is considered as an outlier, thus removed)
-  pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
-  radf.setInputCloud(scene);
-  radf.setRadiusSearch(0.01);
-  radf.setMinNeighborsInRadius(rad_neigh);
-  radf.filter(*object);
+  if (filter)
+  {
+    //Radius outlier removal (if a point has not at least 4 neighbors in 1cm radius it is considered as an outlier, thus removed)
+    pcl::RadiusOutlierRemoval<pcl::PointXYZRGBA> radf;
+    radf.setInputCloud(scene);
+    radf.setRadiusSearch(fil_rad);
+    radf.setMinNeighborsInRadius(fil_neigh);
+    radf.filter(*object);
+    pcl::copyPointCloud(*object, *scene);
+  }
   //clustering 
   if (clustering)
   {
     std::vector<pcl::PointIndices> cluster_indices;
     pcl::EuclideanClusterExtraction<pcl::PointXYZRGBA> ec;
-    ec.setClusterTolerance (0.008);    
-    ec.setMinClusterSize (200);
-    ec.setMaxClusterSize (object->points.size());
-    ec.setInputCloud (object);
+    ec.setClusterTolerance (clus_tol);    
+    ec.setMinClusterSize (clus_min);
+    ec.setMaxClusterSize (scene->points.size());
+    ec.setInputCloud (scene);
     ec.extract (cluster_indices);
     exi.setNegative(false);
-    exi.setInputCloud(object);
+    exi.setInputCloud(scene);
     exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(0)));
-    exi.filter(*scene);
+    exi.filter(*object);
     if (cluster_indices.size() > 1)
     { 
       std::vector<pcl::PointCloud<pcl::PointXYZRGBA> > clusters;
@@ -504,15 +592,14 @@ void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Pt
       for (int i=1; i< cluster_indices.size(); ++i)
       {
         exi.setNegative(false);
-        exi.setInputCloud(object);
+        exi.setInputCloud(scene);
         exi.setIndices(boost::make_shared<pcl::PointIndices>(cluster_indices.at(i)));
         exi.filter(clusters[i]);
       }
       for (int i=1; i< clusters.size(); ++i)
         for (int j=0; j< clusters[i].points.size(); ++j)
-          scene->push_back(clusters[i].points[j]);
+          object->push_back(clusters[i].points[j]);
     }
-    pcl::copyPointCloud(*scene, *object);
   }
 }
 
