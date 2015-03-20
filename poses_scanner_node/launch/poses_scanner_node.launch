@@ -12,6 +12,9 @@
 
 	<!-- the poses scanner node  -->
   <rosparam command="load" file="$(find poses_scanner_node)/config/parameters.yaml" />
-	<node name="poses_scanner_node" pkg="poses_scanner_node" type="poses_scanner_node" output="screen" />
+  <node name="poses_scanner_node" pkg="poses_scanner_node" type="poses_scanner_node" output="screen" />
+
+  <!-- Launch dynamic reconfigure -->
+  <node name="$(anon dynrconf_poses_scanner)" pkg="rqt_reconfigure" type="rqt_reconfigure" respawn="false"/>
 
 </launch>
