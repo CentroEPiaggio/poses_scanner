@@ -137,7 +137,9 @@ class poseGrabber
     bool calibration_;     
     boost::posix_time::ptime timestamp_;
     boost::filesystem::path work_dir_;
-    boost::filesystem::path current_session_;
+    boost::filesystem::path current_session_local;
+    boost::filesystem::path current_session_kinect;
+    boost::filesystem::path current_session_scene;
     //Variables to store parameters
     bool segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30, outlier_70, outlier_50, outlier_30;
     double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
@@ -171,7 +173,9 @@ poseGrabber::poseGrabber()
   //check if we have already found table transformations
   std::string home ( std::getenv("HOME") );
   work_dir_ = (home + "/PoseScanner");
-  current_session_ = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) ); 
+  current_session_local = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) + "/Local" ); 
+  current_session_kinect = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) + "/Kinect" ); 
+  current_session_scene = (work_dir_.string() + "/Session_" + to_simple_string(timestamp_) + "/Scene" ); 
   boost::filesystem::path cal_file  (work_dir_.string() + "/transforms.h5");
   if (boost::filesystem::exists(cal_file) && boost::filesystem::is_regular_file(cal_file) )
   { 
@@ -258,7 +262,7 @@ void poseGrabber::reconfigure(poses_scanner_node::poses_scannerConfig &config, u
   clus_min_70 = config.min_points_70;
   clus_min_50 = config.min_points_50;
   clus_min_30 = config.min_points_30;
-  //update parameters serves also
+  //update parameters server also
   nh.setParam("/poses_scanner/zmin_70", zmin_70);
   nh.setParam("/poses_scanner/zmin_50", zmin_50);
   nh.setParam("/poses_scanner/zmin_30", zmin_30);
@@ -792,7 +796,7 @@ bool poseGrabber::calibrate(poses_scanner_node::table::Request &req, poses_scann
   cal50 = acquire_table_transform(50);
   //last stop
   set_lwr_pose(lwr_rad, 30);  
-  boost::this_thread::sleep (boost::posix_time::microseconds (10000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
+  boost::this_thread::sleep (boost::posix_time::microseconds (20000000)); //wait for lwr  TODO add a topic to monitor if lwr has reached position
   cal30 = acquire_table_transform(30);
   if (cal50 && cal70 && cal30)
   {
@@ -839,14 +843,28 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
     name = req.objname; 
   center_object();
   adjust_object(name);
-  //create directory to store poses writes into "~/PoseScanner"
+  //create directory to store poses writes into "~/PoseScanner/objname/"
+  boost::filesystem::path localpath (current_session_local);//addsubdirs scenes, kinect, local
+  boost::filesystem::path kinectpath (current_session_kinect);//addsubdirs scenes, kinect, local
+  boost::filesystem::path scenepath (current_session_scene);//addsubdirs scenes, kinect, local
+  localpath /= name;
+  kinectpath /= name;
+  scenepath /= name;
   if (!boost::filesystem::exists(work_dir_) || !boost::filesystem::is_directory(work_dir_) )
   {
     boost::filesystem::create_directory(work_dir_);
   }
-  if (!boost::filesystem::exists(current_session_) || !boost::filesystem::is_directory(current_session_))
+  if (!boost::filesystem::exists(localpath) || !boost::filesystem::is_directory(localpath))
   {
-    boost::filesystem::create_directory(current_session_);
+    boost::filesystem::create_directories(localpath);
+  }
+  if (!boost::filesystem::exists(kinectpath) || !boost::filesystem::is_directory(kinectpath))
+  {
+    boost::filesystem::create_directories(kinectpath);
+  }
+  if (!boost::filesystem::exists(scenepath) || !boost::filesystem::is_directory(scenepath))
+  {
+    boost::filesystem::create_directories(scenepath);
   }
   pcl::PointCloud<pcl::PointXYZRGBA>::Ptr c (new pcl::PointCloud<pcl::PointXYZRGBA>);
   pcl::PCDWriter writer;
@@ -895,7 +913,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
 
       pcl::copyPointCloud(*cloud_, *scene_);
       //save scene on disk
-      std::string scenename (current_session_.string() + "/SCENE_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      std::string scenename (scenepath.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (scenename.c_str(), *scene_);
       
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
@@ -951,13 +969,13 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       cloud_local->sensor_origin_ = trasl_sensor;
       cloud_local->sensor_orientation_ = Q_sensor;
       //now save local cloud
-      std::string filename (current_session_.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      std::string filename (localpath.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (filename.c_str(), *cloud_local);
       //publish local pose
       pub_poses_.publish(*cloud_local); //automatic conversion to rosmsg
       
       //save pose in sensor(kinect) on disk
-      std::string kinectname (current_session_.string() + "/KINECT_" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
+      std::string kinectname (kinectpath.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (kinectname.c_str(), *cloud_);
       
       //also let user view the local pose 
