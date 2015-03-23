@@ -8,6 +8,7 @@
 #include <sensor_msgs/point_cloud_conversion.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <dynamic_reconfigure/server.h>
+#include <ros/spinner.h>
 
 // PCL headers
 #include <pcl/common/eigen.h>
@@ -58,12 +59,6 @@ boost::shared_ptr<pcl::visualization::PCLVisualizer> _viewer_ (new pcl::visualiz
 Eigen::Vector3f _picked_;
 bool _proceed_ (false);
 
-//Variables to store parameters
-bool segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30, outlier_70, outlier_50, outlier_30;
-double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
-double clus_tol_70, clus_tol_50, clus_tol_30, out_rad_70, out_rad_50, out_rad_30;
-double lwr_x, lwr_y, lwr_z, lwr_roll, lwr_pitch, lwr_yaw, lwr_rad;
-int out_neigh_70, out_neigh_50, out_neigh_30, clus_min_70, clus_min_50, clus_min_30;
 
 //Point picking event shift+click to activate
 void pickEvent (const pcl::visualization::PointPickingEvent &event, void* viewer_void)
@@ -95,38 +90,6 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
     _proceed_ = true;
   }
 }
-//dynamic reconfigure callback  
-void reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level)
-{
-  ROS_INFO("[poses_scanner] Dynamic reconfigure updates");
-  zmin_70 = config.zmin_70;
-  zmin_50 = config.zmin_50;
-  zmin_30 = config.zmin_30;
-  segment_70 = config.segment_70;
-  segment_50 = config.segment_50;
-  segment_30 = config.segment_30;
-  seg_tol_70 = config.tolerance_70;
-  seg_tol_50 = config.tolerance_50;
-  seg_tol_30 = config.tolerance_30;
-  outlier_70 = config.outlier_removal_70;
-  outlier_50 = config.outlier_removal_50;
-  outlier_30 = config.outlier_removal_30;
-  out_rad_70 = config.radius_search_70;
-  out_rad_50 = config.radius_search_50;
-  out_rad_30 = config.radius_search_30;
-  out_neigh_70 = config.neighbors_70;
-  out_neigh_50 = config.neighbors_50;
-  out_neigh_30 = config.neighbors_30;
-  clustering_70 = config.clustering_70;
-  clustering_50 = config.clustering_50;
-  clustering_30 = config.clustering_30;
-  clus_tol_70 = config.clus_tolerance_70;
-  clus_tol_50 = config.clus_tolerance_50;
-  clus_tol_30 = config.clus_tolerance_30;
-  clus_min_70 = config.min_points_70;
-  clus_min_50 = config.min_points_50;
-  clus_min_30 = config.min_points_30;
-}
 
 class poseGrabber
 {
@@ -140,6 +103,11 @@ class poseGrabber
     //service callback
     bool acquirePoses(poses_scanner_node::acquire::Request& req, poses_scanner_node::acquire::Response& res);
     bool calibrate(poses_scanner_node::table::Request& req, poses_scanner_node::table::Response& res);
+    //dynamic reconfigure
+    void reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level);
+    //dynamic reconfigure server
+    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig> srv_dyn;
+    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig>::CallbackType callback;
 
     //method to move turn table
     bool set_turnTable_pos(float pos);
@@ -176,6 +144,13 @@ class poseGrabber
     boost::filesystem::path current_session_scene;
     
     Eigen::Matrix4f T_70, T_50, T_30; //transforms from camera to table
+    
+    //Variables to store parameters
+    bool segment_70, segment_50, segment_30, clustering_70, clustering_50, clustering_30, outlier_70, outlier_50, outlier_30;
+    double zmin_70, zmin_50, zmin_30, seg_tol_70, seg_tol_50, seg_tol_30;
+    double clus_tol_70, clus_tol_50, clus_tol_30, out_rad_70, out_rad_50, out_rad_30;
+    double lwr_x, lwr_y, lwr_z, lwr_roll, lwr_pitch, lwr_yaw, lwr_rad;
+    int out_neigh_70, out_neigh_50, out_neigh_30, clus_min_70, clus_min_50, clus_min_30;
 };
 
 //Class Constructor
@@ -185,6 +160,9 @@ poseGrabber::poseGrabber()
   //service callbacks
   srv_acquire_ = nh.advertiseService("acquire_poses", &poseGrabber::acquirePoses, this);
   srv_table_ = nh.advertiseService("calibrate", &poseGrabber::calibrate, this);
+  //bind callback for dynamic reconfigure
+  callback = boost::bind(&poseGrabber::reconfigure, this, _1, _2);
+  srv_dyn.setCallback(callback);
   //advertise acquired poses
   pub_poses_ = nh.advertise<pcl::PointCloud<pcl::PointXYZRGBA> > ("acquired_poses",1);
   //publish to lwr controller
@@ -256,6 +234,67 @@ poseGrabber::poseGrabber()
   nh.param<double>("/poses_scanner/lwr_Pitch", lwr_pitch, 0);
   nh.param<double>("/poses_scanner/lwr_Yaw", lwr_yaw, 0);
   nh.param<double>("/poses_scanner/lwr_rad", lwr_rad, 0.8);
+}
+//dynamic reconfigure callback  
+void poseGrabber::reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level)
+{
+  ROS_INFO("[poses_scanner] Dynamic reconfigure updates");
+  zmin_70 = config.zmin_70;
+  zmin_50 = config.zmin_50;
+  zmin_30 = config.zmin_30;
+  segment_70 = config.segment_70;
+  segment_50 = config.segment_50;
+  segment_30 = config.segment_30;
+  seg_tol_70 = config.tolerance_70;
+  seg_tol_50 = config.tolerance_50;
+  seg_tol_30 = config.tolerance_30;
+  outlier_70 = config.outlier_removal_70;
+  outlier_50 = config.outlier_removal_50;
+  outlier_30 = config.outlier_removal_30;
+  out_rad_70 = config.radius_search_70;
+  out_rad_50 = config.radius_search_50;
+  out_rad_30 = config.radius_search_30;
+  out_neigh_70 = config.neighbors_70;
+  out_neigh_50 = config.neighbors_50;
+  out_neigh_30 = config.neighbors_30;
+  clustering_70 = config.clustering_70;
+  clustering_50 = config.clustering_50;
+  clustering_30 = config.clustering_30;
+  clus_tol_70 = config.clus_tolerance_70;
+  clus_tol_50 = config.clus_tolerance_50;
+  clus_tol_30 = config.clus_tolerance_30;
+  clus_min_70 = config.min_points_70;
+  clus_min_50 = config.min_points_50;
+  clus_min_30 = config.min_points_30;
+
+  //update parameters server also
+  nh.setParam("/poses_scanner/zmin_70", zmin_70);
+  nh.setParam("/poses_scanner/zmin_50", zmin_50);
+  nh.setParam("/poses_scanner/zmin_30", zmin_30);
+  nh.setParam("/poses_scanner/segment_70", segment_70);
+  nh.setParam("/poses_scanner/segment_50", segment_50);
+  nh.setParam("/poses_scanner/segment_30", segment_30);
+  nh.setParam("/poses_scanner/seg_tol_70", seg_tol_70);
+  nh.setParam("/poses_scanner/seg_tol_50", seg_tol_50);
+  nh.setParam("/poses_scanner/seg_tol_30", seg_tol_30);
+  nh.setParam("/poses_scanner/outlier_removal_70", outlier_70);
+  nh.setParam("/poses_scanner/outlier_removal_50", outlier_50);
+  nh.setParam("/poses_scanner/outlier_removal_30", outlier_30);
+  nh.setParam("/poses_scanner/radius_search_70", out_rad_70);
+  nh.setParam("/poses_scanner/radius_search_50", out_rad_50);
+  nh.setParam("/poses_scanner/radius_search_30", out_rad_30);
+  nh.setParam("/poses_scanner/neighbors_70", out_neigh_70);
+  nh.setParam("/poses_scanner/neighbors_50", out_neigh_50);
+  nh.setParam("/poses_scanner/neighbors_30", out_neigh_30);
+  nh.setParam("/poses_scanner/clustering_70", clustering_70);
+  nh.setParam("/poses_scanner/clustering_50", clustering_50);
+  nh.setParam("/poses_scanner/clustering_30", clustering_30);
+  nh.setParam("/poses_scanner/clus_tol_70", clus_tol_70);
+  nh.setParam("/poses_scanner/clus_tol_50", clus_tol_50);
+  nh.setParam("/poses_scanner/clus_tol_30", clus_tol_30);
+  nh.setParam("/poses_scanner/clus_min_70", clus_min_70);
+  nh.setParam("/poses_scanner/clus_min_50", clus_min_50);
+  nh.setParam("/poses_scanner/clus_min_30", clus_min_30);
 }
 
 //wrapper function to grab a cloud
@@ -988,46 +1027,12 @@ int main(int argc, char **argv)
     _viewer_->registerKeyboardCallback ( keyboardEvent, (void*)&_viewer_);
     _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
     _viewer_->spinOnce(100);
-    //dynamic reconfigure server
-    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig> srv_dyn;
-    dynamic_reconfigure::Server<poses_scanner_node::poses_scannerConfig>::CallbackType callback;
-    //bind callback for dynamic reconfigure
-    callback = boost::bind(&reconfigure, _1, _2);
-    srv_dyn.setCallback(callback);
+    ros::AsyncSpinner spinner(0); //auto thread allocation
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
-    ros::Rate rate(100);
     while (node.nh.ok())
     {
-      ros::spinOnce();
-      rate.sleep();
-      //update parameters server also
-      node.nh.setParam("/poses_scanner/zmin_70", zmin_70);
-      node.nh.setParam("/poses_scanner/zmin_50", zmin_50);
-      node.nh.setParam("/poses_scanner/zmin_30", zmin_30);
-      node.nh.setParam("/poses_scanner/segment_70", segment_70);
-      node.nh.setParam("/poses_scanner/segment_50", segment_50);
-      node.nh.setParam("/poses_scanner/segment_30", segment_30);
-      node.nh.setParam("/poses_scanner/seg_tol_70", seg_tol_70);
-      node.nh.setParam("/poses_scanner/seg_tol_50", seg_tol_50);
-      node.nh.setParam("/poses_scanner/seg_tol_30", seg_tol_30);
-      node.nh.setParam("/poses_scanner/outlier_removal_70", outlier_70);
-      node.nh.setParam("/poses_scanner/outlier_removal_50", outlier_50);
-      node.nh.setParam("/poses_scanner/outlier_removal_30", outlier_30);
-      node.nh.setParam("/poses_scanner/radius_search_70", out_rad_70);
-      node.nh.setParam("/poses_scanner/radius_search_50", out_rad_50);
-      node.nh.setParam("/poses_scanner/radius_search_30", out_rad_30);
-      node.nh.setParam("/poses_scanner/neighbors_70", out_neigh_70);
-      node.nh.setParam("/poses_scanner/neighbors_50", out_neigh_50);
-      node.nh.setParam("/poses_scanner/neighbors_30", out_neigh_30);
-      node.nh.setParam("/poses_scanner/clustering_70", clustering_70);
-      node.nh.setParam("/poses_scanner/clustering_50", clustering_50);
-      node.nh.setParam("/poses_scanner/clustering_30", clustering_30);
-      node.nh.setParam("/poses_scanner/clus_tol_70", clus_tol_70);
-      node.nh.setParam("/poses_scanner/clus_tol_50", clus_tol_50);
-      node.nh.setParam("/poses_scanner/clus_tol_30", clus_tol_30);
-      node.nh.setParam("/poses_scanner/clus_min_70", clus_min_70);
-      node.nh.setParam("/poses_scanner/clus_min_50", clus_min_50);
-      node.nh.setParam("/poses_scanner/clus_min_30", clus_min_30);
+      spinner.start(); 
     }
+    spinner.stop();
     return 0;
 }
