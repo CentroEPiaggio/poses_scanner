@@ -98,6 +98,7 @@ void keyboardEvent (const pcl::visualization::KeyboardEvent &event, void* viewer
 //dynamic reconfigure callback  
 void reconfigure(poses_scanner_node::poses_scannerConfig &config, uint32_t level)
 {
+  ROS_INFO("[poses_scanner] Dynamic reconfigure updates");
   zmin_70 = config.zmin_70;
   zmin_50 = config.zmin_50;
   zmin_30 = config.zmin_30;
