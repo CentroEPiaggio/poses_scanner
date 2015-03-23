@@ -553,6 +553,7 @@ void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Pt
   pt.setFilterFieldName ("y");
   pt.setFilterLimits (-0.25, 0.25);
   pt.filter (*scene);
+  pcl::copyPointCloud(*scene, *object);
 
   pcl::ExtractIndices<pcl::PointXYZRGBA> exi;
   // plane segmentation
@@ -571,7 +572,8 @@ void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Pt
     exi.setInputCloud(scene);
     exi.setNegative(true);
     exi.setIndices(table_inliers);
-    exi.filter(*scene);
+    exi.filter(*object);
+    pcl::copyPointCloud(*object, *scene);
   }
   if (filter)
   {
