@@ -387,13 +387,13 @@ void poseGrabber::center_table()
   { 
     acquire_scene(tmp, false);
     _viewer_->updatePointCloud(tmp,"table_cloud");
-    _viewer_->spinOnce(300);
+    _viewer_->spinOnce(300, true);
   }
   _proceed_ = false;
   _viewer_->removeShape("line"); 
   _viewer_->removeShape("center_t");
   _viewer_->removePointCloud("table_cloud");
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
 }
 
 void poseGrabber::center_object()
@@ -423,20 +423,20 @@ void poseGrabber::center_object()
   _viewer_->addPlane(x_plane,"plane_x");
   _viewer_->addPlane(y_plane,"plane_y");
   _viewer_->addCoordinateSystem(0.2);
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
   while (!_proceed_)
   { 
     acquire_scene(acq, false);
     pcl::transformPointCloud(*acq, *tmp, T_inv);
     _viewer_->updatePointCloud(tmp,"cloud_ob");
-    _viewer_->spinOnce(300);
+    _viewer_->spinOnce(300, true);
   }
   _proceed_ = false;
   _viewer_->removeShape("center_ob"); 
   _viewer_->removeShape("plane_x");
   _viewer_->removeShape("plane_y");
   _viewer_->removePointCloud("cloud_ob");
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
 }
 
 void poseGrabber::try_segmentation(int lat)
@@ -457,7 +457,7 @@ void poseGrabber::try_segmentation(int lat)
   pcl::transformPointCloud(*acq, *tmp, T_inv);
   _viewer_->addCoordinateSystem(0.2);
   _viewer_->addPointCloud(tmp,"seg_cl");
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
   while (!_proceed_)
   { 
     acquire_scene(acq, false);
@@ -465,12 +465,12 @@ void poseGrabber::try_segmentation(int lat)
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr obj (new pcl::PointCloud<pcl::PointXYZRGBA>);
     extract_object(lat, tmp, obj);
     _viewer_->updatePointCloud(obj,"seg_cl");
-    _viewer_->spinOnce(300);
+    _viewer_->spinOnce(300, true);
   }
   _proceed_ = false;
   _viewer_->removeShape("seg_t");
   _viewer_->removePointCloud("seg_cl");
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
 }
 
 void poseGrabber::adjust_object(std::string name)
@@ -648,9 +648,9 @@ bool poseGrabber::acquire_table_transform (int latitude)
   _viewer_->addPointCloud(tmp,"pick_cloud");
   while (!_proceed_)
   {
-    _viewer_->spinOnce(100);
+    _viewer_->spinOnce(300, true);
   }
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
   _proceed_ = false;
   
   pcl::SACSegmentation<pcl::PointXYZRGBA> segc;
@@ -766,9 +766,9 @@ bool poseGrabber::acquire_table_transform (int latitude)
   _viewer_->addText("Final table transformation, press 't' to proceed.",50,50,18,250,150,150,"final_text");
   while (!_proceed_)
   {
-    _viewer_->spinOnce (100);
+    _viewer_->spinOnce (300, true);
   }
-  _viewer_->spinOnce(100);
+  _viewer_->spinOnce(300, true);
   _proceed_ = false;
   return true;
 }
@@ -993,7 +993,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
       
       //also let user view the local pose 
       _viewer_->updatePointCloud(cloud_local,"pose");
-      _viewer_->spinOnce(300);
+      _viewer_->spinOnce(300, true);
       //move turntable
       for (int t=1; t<=lon_pass; ++t)
       {//for table steps: 1 degree
@@ -1010,7 +1010,7 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
   _viewer_->removePointCloud("pose");
   _viewer_->removeCoordinateSystem();
   _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
-  _viewer_->spinOnce(200);
+  _viewer_->spinOnce(300, true);
   float cur_pos = get_turnTable_pos();
   if (cur_pos != 0)
   {
@@ -1034,7 +1034,7 @@ int main(int argc, char **argv)
     _viewer_->registerPointPickingCallback ( pickEvent , (void*)&_viewer_);
     _viewer_->registerKeyboardCallback ( keyboardEvent, (void*)&_viewer_);
     _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
-    _viewer_->spinOnce(100);
+    _viewer_->spinOnce(300, true);
     ros::AsyncSpinner spinner(0); //auto thread allocation
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     while (node.nh.ok())
