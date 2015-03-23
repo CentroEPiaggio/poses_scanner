@@ -129,7 +129,7 @@ class poseGrabber
     void extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr scene, pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object);
 
     //method to acquire scene from openni2
-    bool acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired);
+    bool acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired, bool keep_organized);
 
     //method to acquire and save table transformation
     bool acquire_table_transform (int latitude);
@@ -298,8 +298,12 @@ void poseGrabber::reconfigure(poses_scanner_node::poses_scannerConfig &config, u
 }
 
 //wrapper function to grab a cloud
-bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired)
+bool poseGrabber::acquire_scene (pcl::PointCloud<pcl::PointXYZRGBA>::Ptr acquired, bool keep_organized)
 { 
+  if (keep_organized)
+    nh.setParam("/scene_filter/keep_organized", true);
+  else
+    nh.setParam("/scene_filter/keep_organized", false);
   std::string acquire_scene_srv_name = nh.resolveName("/scene_filter_node/acquire_scene");
   scene_filter_node::acquire_scene acquire_srv;
   acquire_srv.request.save = "false";
@@ -381,7 +385,7 @@ void poseGrabber::center_table()
   _viewer_->addLine(a,b,0,0.2,0.95,"line");
   while (!_proceed_)
   { 
-    acquire_scene(tmp);
+    acquire_scene(tmp, false);
     _viewer_->updatePointCloud(tmp,"table_cloud");
     _viewer_->spinOnce(300);
   }
@@ -414,7 +418,7 @@ void poseGrabber::center_object()
   y_plane.values[2] = 0;
   y_plane.values[3] = 0;
   Eigen::Matrix4f T_inv = T_50.inverse();
-  acquire_scene(acq);
+  acquire_scene(acq, false);
   pcl::transformPointCloud(*acq, *tmp, T_inv);
   _viewer_->addPlane(x_plane,"plane_x");
   _viewer_->addPlane(y_plane,"plane_y");
@@ -422,7 +426,7 @@ void poseGrabber::center_object()
   _viewer_->spinOnce(100);
   while (!_proceed_)
   { 
-    acquire_scene(acq);
+    acquire_scene(acq, false);
     pcl::transformPointCloud(*acq, *tmp, T_inv);
     _viewer_->updatePointCloud(tmp,"cloud_ob");
     _viewer_->spinOnce(300);
@@ -449,14 +453,14 @@ void poseGrabber::try_segmentation(int lat)
     T_inv = T_50.inverse();
   if (lat == 30)
     T_inv = T_30.inverse();
-  acquire_scene(acq);
+  acquire_scene(acq, false);
   pcl::transformPointCloud(*acq, *tmp, T_inv);
   _viewer_->addCoordinateSystem(0.2);
   _viewer_->addPointCloud(tmp,"seg_cl");
   _viewer_->spinOnce(100);
   while (!_proceed_)
   { 
-    acquire_scene(acq);
+    acquire_scene(acq, false);
     pcl::transformPointCloud(*acq, *tmp, T_inv);
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr obj (new pcl::PointCloud<pcl::PointXYZRGBA>);
     extract_object(lat, tmp, obj);
@@ -615,7 +619,7 @@ void poseGrabber::extract_object(int lat, pcl::PointCloud<pcl::PointXYZRGBA>::Pt
 bool poseGrabber::acquire_table_transform (int latitude)
 {
   //wait for a cloud from sensor
-  if (! acquire_scene(cloud_) )
+  if (! acquire_scene(cloud_, false) )
   {
     ROS_ERROR("[posesScanner] Cannot acquire a scene!");
     return false;
@@ -910,17 +914,21 @@ bool poseGrabber::acquirePoses(poses_scanner_node::acquire::Request &req, poses_
         }
         boost::this_thread::sleep (boost::posix_time::microseconds (50000)); //wait for table to be in position
       }
-      if (! acquire_scene (cloud_) )
+      if (! acquire_scene (scene_, true) )
       {
         ROS_ERROR("[posesScanner] Cannot acquire a scene!");
         return false;
       }
 
-      pcl::copyPointCloud(*cloud_, *scene_);
       //save scene on disk
       std::string scenename (scenepath.string() + "/" + name + "_" + std::to_string(lat) + "_" + std::to_string(lon) + ".pcd" );
       writer.writeBinaryCompressed (scenename.c_str(), *scene_);
       
+      if (! acquire_scene (cloud_, false) )
+      {
+        ROS_ERROR("[posesScanner] Cannot acquire a scene!");
+        return false;
+      }
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr temp (new pcl::PointCloud<pcl::PointXYZRGBA>);
       pcl::PointCloud<pcl::PointXYZRGBA>::Ptr object (new pcl::PointCloud<pcl::PointXYZRGBA>);
       
