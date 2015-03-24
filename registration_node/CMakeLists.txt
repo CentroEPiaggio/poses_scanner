@@ -67,6 +67,7 @@ add_service_files(
   set_poses.srv
   execute.srv
   save.srv
+  reconstruct.srv
 )
 
 ## Generate actions in the 'action' folder
