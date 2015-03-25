@@ -65,26 +65,30 @@ class register_poses
     
     std::vector<pose> original_poses;
     std::vector<pose> registered_poses;
-    //std::vector<pose> registered_poses_lum;
+    std::vector<PCN> smoothed_poses;
 
     PC::Ptr concatenated_original;
-    PCN::Ptr concatenated_registered;
+    PC::Ptr concatenated_registered;
+    PCN::Ptr concatenated_smoothed;
     //PC::Ptr concatenated_registered_lum;
     
     pcl::PolygonMesh mesh;
 
     pcl::IterativeClosestPoint<PT,PT> icp;
     //pcl::registration::LUM<PT> lum;
-    bool initialized, registered, reconstructed;
+    bool initialized, registered, reconstructed, smoothed;
     int i_30, i_70;
+    //visualization
+    pcl::visualization::PCLVisualizer viewer;
 };
 
 register_poses::register_poses()
 {
-  PC a;
-  PCN b;
+  PC a,b;
+  PCN c;
   concatenated_original= a.makeShared();
   concatenated_registered = b.makeShared();
+  concatenated_smoothed = c.makeShared();
   //concatenated_registered_lum = c.makeShared();
   nh = ros::NodeHandle("registration_node");
   srv_set = nh.advertiseService("set_poses", &register_poses::setPoses, this);
@@ -94,6 +98,7 @@ register_poses::register_poses()
   initialized = false;
   registered = false;
   reconstructed = false;
+  smoothed = false;
   //viewer.setRegistration(icp);
 }
 
@@ -275,7 +280,6 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
   icp.setUseReciprocalCorrespondences(true);
   icp.setInputTarget(original_poses[0].second.makeShared());
   registered_poses.push_back(original_poses[0]);
-  pcl::visualization::PCLVisualizer viewer;
   PC::Ptr orig (original_poses[0].second.makeShared());
   PC::Ptr regis (registered_poses[0].second.makeShared());
   pcl::visualization::PointCloudColorHandlerCustom<PT> original_color (orig, 255,0,0);
@@ -372,6 +376,7 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     aligned->sensor_origin_ = t_kr;
     aligned->sensor_orientation_ = Q_kr;
     pcl::copyPointCloud(*aligned, registered_poses[i].second);
+    *concatenated_registered += *aligned;
     pcl::copyPointCloud(it->second, *orig);
     pcl::copyPointCloud(*aligned, *regis);
     viewer.updatePointCloud(orig, original_color, "original");
@@ -385,54 +390,15 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
 
   viewer.removeShape("text3");
   viewer.spinOnce(100);
-  viewer.close();
   std::cout<<std::endl;
   i=0;
-  pcl::NormalEstimationOMP<pcl::PointXYZ,pcl::Normal> ne;
-  PCN::Ptr obj_with_normals (new PCN); 
-  pcl::search::KdTree<pcl::PointXYZ>::Ptr tree_o (new pcl::search::KdTree<pcl::PointXYZ>);
-  for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
-  {
-    //dropping color and adding normals
-    std::cout<<"\r"<<std::flush;
-    std::cout<<"Computing normals of "<<it->first.c_str()<<" \t["<<i+1<<"/"<<registered_poses.size()<<"]";
-    pcl::PointCloud<pcl::PointXYZ>::Ptr obj (new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
-    pcl::copyPointCloud(it->second, *obj);
-    ne.setSearchMethod(tree_o);
-    ne.setRadiusSearch(0.015);
-    ne.setNumberOfThreads(0);
-    ne.setInputCloud(obj);
-    ne.useSensorOriginAsViewPoint();
-    ne.compute(*normals);
-    pcl::concatenateFields (*obj, *normals, *obj_with_normals);
-    *concatenated_registered += *obj_with_normals;
-  }
-  std::cout<<std::endl;
-  std::cout<<"Extrapolating a complete model point cloud..."<<std::flush;
-  std::string home (std::getenv("HOME"));
-  //filtering of concatenated cloud
-  //pcl::VoxelGrid<PT> vg;
-  PCN tmp;
-  //vg.setLeafSize(0.003, 0.003, 0.003);
-  //vg.setInputCloud(concatenated_registered);
-  //vg.filter(tmp);
-  //pcl::copyPointCloud(tmp, *concatenated_registered);
-  pcl::RadiusOutlierRemoval<PNT> radout;
-  radout.setInputCloud(concatenated_registered);
-  radout.setRadiusSearch(0.005);
-  radout.setMinNeighborsInRadius(300);
-  radout.filter(tmp);
-  pcl::copyPointCloud(tmp, *concatenated_registered);
-  std::cout<<"    DONE!"<<std::endl;
-  
 //  vg.setInputCloud(concatenated_registered_lum);
 //  vg.filter(tmp);
 //  pcl::copyPointCloud(tmp, *concatenated_registered_lum);
 //  pcl::io::savePCDFile ( (home + "/original.pcd").c_str(), *concatenated_original );
 //  pcl::io::savePCDFile ( (home + "/icp.pcd").c_str(), *concatenated_registered );
 //  pcl::io::savePCDFile ( (home + "/lum.pcd").c_str(), *concatenated_registered_lum );
-  ROS_INFO("[Registration_Node] Registration Success!!");
+  ROS_INFO("[Registration_Node] Registration complete!");
   res.success = true;
   registered = true;
   return true;
@@ -459,14 +425,19 @@ bool register_poses::save(registration_node::save::Request& req, registration_no
   }
   path concatenated_reg (directory);
   path concatenated_orig (directory);
+  path concatenated_smooth (directory);
   std::vector<std::string> vst;
   boost::split(vst, original_poses[0].first.stem().string(), boost::is_any_of("_"), boost::token_compress_on);
-  path name_reg (vst.at(vst.size()-3) + ".pcd");
+  path name_reg (vst.at(vst.size()-3) + "_reg.pcd");
   path name_orig (vst.at(vst.size()-3) + "_orig.pcd");
+  path name_smooth (vst.at(vst.size()-3) + "_smooth.pcd");
   concatenated_reg /= name_reg;
   concatenated_orig /= name_orig;
+  concatenated_smooth /= name_smooth;
   pcl::io::savePCDFileBinaryCompressed (concatenated_reg.c_str(), *concatenated_registered); 
   pcl::io::savePCDFileBinaryCompressed (concatenated_orig.c_str(), *concatenated_original); 
+  if (smoothed)
+    pcl::io::savePCDFileBinaryCompressed (concatenated_smooth.c_str(), *concatenated_smoothed); 
   res.success = true;
   ROS_INFO("[Registration_Node] Registered poses saved into %s", directory.c_str());
   return true;
@@ -479,57 +450,110 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
     return false;
   }
   ROS_WARN("[Registration_Node] Starting Surface Reconstruction procedure, PLEASE NOTE IT COULD TAKE A LONG TIME...");
+  pcl::NormalEstimationOMP<pcl::PointXYZ,pcl::Normal> ne;
+  pcl::search::KdTree<pcl::PointXYZ>::Ptr tree_o (new pcl::search::KdTree<pcl::PointXYZ>);
+  int i(0);
+  smoothed_poses.clear();
+  concatenated_smoothed->clear();
+  for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
+  {
+    //dropping color and adding normals
+    std::cout<<"\r"<<std::flush;
+    std::cout<<"Computing normals of "<<it->first.c_str()<<" \t["<<i+1<<"/"<<registered_poses.size()<<"]";
+    pcl::PointCloud<pcl::PointXYZ>::Ptr obj (new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+    PCN::Ptr obj_with_normals (new PCN); 
+    pcl::copyPointCloud(it->second, *obj);
+    ne.setSearchMethod(tree_o);
+    ne.setRadiusSearch(0.008);
+    ne.setNumberOfThreads(0);
+    ne.setInputCloud(obj);
+    ne.useSensorOriginAsViewPoint();
+    ne.compute(*normals);
+    pcl::concatenateFields (*obj, *normals, *obj_with_normals);
+    smoothed_poses.push_back(*obj_with_normals);
+  }
+  std::cout<<std::endl;
+  
   PCN::Ptr temp (new PCN);
   pcl::search::KdTree<PNT>::Ptr tree (new pcl::search::KdTree<PNT>);
-  if (req.smoothing)
+  pcl::VoxelGrid<PNT> vg;
+  pcl::MovingLeastSquares<PNT, PNT> mls;
+  pcl::RadiusOutlierRemoval<PNT> radout;
+  
+  PC::Ptr reg (new PC);
+  pcl::PointCloud<pcl::PointXYZ>::Ptr smoo (new pcl::PointCloud<pcl::PointXYZ>);
+  pcl::PointCloud<pcl::Normal>::Ptr smoo_n (new pcl::PointCloud<pcl::Normal>);
+  pcl::visualization::PointCloudColorHandlerCustom<PT> registered_color (reg, 0,255,0);
+  viewer.addPointCloud(reg, registered_color, "registered");
+  viewer.addPointCloud(smoo, "smoothed");
+  viewer.addText("Registered Pose in green", 50,20, 18, 0,1,0, "text1");
+  viewer.addText("Smoothed Pose with normals", 50,50, 18, 0,0,1, "text2");
+
+  for (int i=0; i<smoothed_poses.size(); ++i)
   {
-    std::cout<<"Moving Least Squares..."<<std::flush;
-    pcl::VoxelGrid<PNT> vg;
+    std::cout<<"\r"<<std::flush;
+    viewer.removePointCloud("smoothed");
+    std::cout<<"Smoothing: pre-downsample, MLS and filtering \t["<<i+1<<"/"<<smoothed_poses.size()<<"]"<<std::flush;
     vg.setLeafSize(0.001, 0.001, 0.001);
-    vg.setInputCloud(concatenated_registered);
+    vg.setInputCloud(smoothed_poses[i].makeShared());
     vg.setDownsampleAllData(true);
     vg.filter(*temp);
-    pcl::copyPointCloud(*temp, *concatenated_registered);
-    pcl::MovingLeastSquares<PNT, PNT> mls;
-    mls.setInputCloud(concatenated_registered);
+    pcl::copyPointCloud(*temp, smoothed_poses[i]);
+    
+    mls.setInputCloud(smoothed_poses[i].makeShared());
     mls.setSearchMethod (tree);
     mls.setUpsamplingMethod (pcl::MovingLeastSquares<PNT, PNT>::NONE);
     mls.setComputeNormals (false);
     mls.setPolynomialOrder (2);
     mls.setPolynomialFit (true);
-    mls.setSearchRadius (0.015);
-    mls.setSqrGaussParam (0.000225); //radius^2
+    mls.setSearchRadius (0.01);
+    mls.setSqrGaussParam (0.0001); //radius^2
     mls.process (*temp);
-    pcl::copyPointCloud(*temp, *concatenated_registered);
-    pcl::RadiusOutlierRemoval<PNT> radout;
-    radout.setInputCloud(concatenated_registered);
-    radout.setRadiusSearch(0.015);
-    radout.setMinNeighborsInRadius(200);
+    pcl::copyPointCloud(*temp, smoothed_poses[i]);
+    
+    radout.setInputCloud(smoothed_poses[i].makeShared());
+    radout.setRadiusSearch(0.006);
+    radout.setMinNeighborsInRadius(20);
     radout.filter(*temp);
-    pcl::copyPointCloud(*temp, *concatenated_registered);
-    vg.setLeafSize(0.003, 0.003, 0.003);
-    vg.setInputCloud(concatenated_registered);
-    vg.filter(*temp);
-    pcl::copyPointCloud(*temp, *concatenated_registered);
-    std::cout<<"    DONE!"<<std::endl;
+    pcl::copyPointCloud(*temp, smoothed_poses[i]);
+    pcl::copyPointCloud(*temp, *smoo);
+    pcl::copyPointCloud(*temp, *smoo_n);
+    pcl::copyPointCloud(registered_poses[i].second, *reg);
+    viewer.updatePointCloud(reg, "registered");
+    viewer.addPointCloud(smoo, "smoothed");
+    viewer.spinOnce(100);
+    *concatenated_smoothed += smoothed_poses[i];
   }
+  viewer.removePointCloud("registered");
+  viewer.removePointCloud("smoothed");
+  viewer.removeShape("text1");
+  viewer.removeShape("text2");
+  viewer.spinOnce(100);
+  std::cout<<std::endl;
+  vg.setLeafSize(0.0015, 0.0015, 0.0015);
+  vg.setInputCloud(concatenated_smoothed);
+  vg.filter(*temp);
+  pcl::copyPointCloud(*temp, *concatenated_smoothed);
   //GreedyProjectionTriangulation
   pcl::GreedyProjectionTriangulation<PNT> gpt; 
   std::cout<<"Greedy Projection Triangulation..."<<std::flush;
-  gpt.setSearchRadius(0.035);
+  gpt.setSearchRadius(0.015);
   gpt.setMu(2.5);
-  gpt.setMaximumNearestNeighbors (100);
-  gpt.setMaximumSurfaceAngle(M_PI/4); 
+  gpt.setMaximumNearestNeighbors (200);
+  gpt.setMaximumSurfaceAngle(M_PI/3); 
   gpt.setMinimumAngle(M_PI/18); //5 deg
   gpt.setMaximumAngle(2*M_PI/3); //120 deg
-  gpt.setNormalConsistency(false);
+  gpt.setNormalConsistency(true);
 
-  gpt.setInputCloud(concatenated_registered);
+  gpt.setInputCloud(concatenated_smoothed);
   gpt.setSearchMethod(tree);
   gpt.reconstruct(mesh);
   
-  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh.ply", mesh);
-  std::cout<<"    DONE!"<<std::endl;
+  smoothed=true;
+  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh.ply", mesh);//TODO remove and include in save service
+  std::cout<<"\tDone"<<std::endl;
+  ROS_INFO("[Registration_Node] Surface reconstruction complete!");
   res.success = true;
 }
 
