@@ -352,10 +352,12 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     if (i < i_70)
     {
       icp.setInputTarget(registered_poses[i - i_30].second.makeShared());
+      pcl::copyPointCloud(registered_poses[i - i_30].second, *orig);
     }
     else if (i>= i_70 && i<original_poses.size())
     {
       icp.setInputTarget(registered_poses[i - i_70].second.makeShared());
+      pcl::copyPointCloud(registered_poses[i - i_70].second, *orig);
     }
     icp.setInputSource(it->second.makeShared());
     PC::Ptr aligned (new PC);
@@ -382,7 +384,6 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     aligned->sensor_orientation_ = Q_kr;
     pcl::copyPointCloud(*aligned, registered_poses[i].second);
     *concatenated_registered += *aligned;
-    pcl::copyPointCloud(it->second, *orig);
     pcl::copyPointCloud(*aligned, *regis);
     viewer.updatePointCloud(orig, original_color, "original");
     viewer.updatePointCloud(regis, registered_color, "registered");
@@ -474,7 +475,7 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   viewer.addText("Composed model so far in blue", 50,50, 18, 0,0,1, "text");
   viewer.resetCamera();
   std::cout<<"\r"<<std::flush;
-  std::cout<<"Concatenating complete model... ";
+  std::cout<<"Concatenating complete model... "<<std::flush;
   for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it)
   {
     //dropping color information TODO find a way to keep it
@@ -486,36 +487,19 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   std::cout<<"\tDone"<<std::endl;
     
   std::cout<<"\r"<<std::flush;
-  std::cout<<"Filtering model of outliers... ";
+  std::cout<<"Filtering model of outliers... "<<std::flush;
   radout.setInputCloud(comp);
   radout.setRadiusSearch(0.01);
-  radout.setMinNeighborsInRadius(100);
+  radout.setMinNeighborsInRadius(1000);
   radout.filter(*temp);
   pcl::copyPointCloud(*temp, *comp);
   viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
   viewer.spinOnce(500);
   std::cout<<"\tDone"<<std::endl;
     
-  
   std::cout<<"\r"<<std::flush;
-  std::cout<<"Applying smoothing through Moving Least Squares... ";
-  mls.setInputCloud(comp);
-  mls.setSearchMethod (tree);
-  mls.setUpsamplingMethod (pcl::MovingLeastSquares<P, P>::NONE);
-  mls.setComputeNormals (false);
-  mls.setPolynomialOrder (2);
-  mls.setPolynomialFit (true);
-  mls.setSearchRadius (0.04);
-  mls.setSqrGaussParam (0.0016); //radius^2
-  mls.process (*temp);
-  pcl::copyPointCloud(*temp, *comp);
-  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
-  viewer.spinOnce(500);
-  std::cout<<"\tDone"<<std::endl;
-  
-  std::cout<<"\r"<<std::flush;
-  std::cout<<"Downsampling model with Voxel Grid... ";
-  vg.setLeafSize(0.0015, 0.0015, 0.0015);
+  std::cout<<"Pre-Downsampling model with Voxel Grid... "<<std::flush;
+  vg.setLeafSize(0.002, 0.002, 0.002);
   vg.setInputCloud(comp);
   vg.filter(*temp);
   pcl::copyPointCloud(*temp, *comp);
@@ -524,7 +508,33 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   std::cout<<"\tDone"<<std::endl;
   
   std::cout<<"\r"<<std::flush;
-  std::cout<<"Computing Normals of model... ";
+  std::cout<<"Applying smoothing through Moving Least Squares... "<<std::flush;
+  mls.setInputCloud(comp);
+  mls.setSearchMethod (tree);
+  mls.setUpsamplingMethod (pcl::MovingLeastSquares<P, P>::NONE);
+  mls.setComputeNormals (false);
+  mls.setPolynomialOrder (2);
+  mls.setPolynomialFit (true);
+  mls.setSearchRadius (0.03);
+  mls.setSqrGaussParam (0.0009); //radius^2
+  mls.process (*temp);
+  pcl::copyPointCloud(*temp, *comp);
+  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
+  
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Final Downsample model with Voxel Grid... "<<std::flush;
+  vg.setLeafSize(0.001, 0.001, 0.001);
+  vg.setInputCloud(comp);
+  vg.filter(*temp);
+  pcl::copyPointCloud(*temp, *comp);
+  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
+  
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Computing Normals of model... "<<std::flush;
     
   ne.setSearchMethod(tree);
   ne.setRadiusSearch(0.02);
