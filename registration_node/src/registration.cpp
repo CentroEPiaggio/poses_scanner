@@ -27,10 +27,11 @@
 #include <pcl/point_types.h>
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/filters/radius_outlier_removal.h>
-#include <pcl/surface/gp3.h>
+#include <pcl/surface/poisson.h>
 #include <pcl/features/normal_3d_omp.h>
 #include <pcl/surface/mls.h>
 #include <pcl/surface/impl/mls.hpp>
+#include <pcl/visualization/impl/pcl_visualizer.hpp>
 
 //general utilities
 #include <cmath>
@@ -47,6 +48,8 @@ typedef pcl::PointXYZRGBA PT; //default point type
 typedef pcl::PointCloud<PT> PC; //default point cloud
 typedef pcl::PointNormal PNT; //default point normal type
 typedef pcl::PointCloud<PNT> PCN; //default point cloud with normal
+typedef pcl::PointXYZ P; //pointtype with just coordinates
+typedef pcl::PointCloud<P> PP; //point cloud holding P type
 typedef std::pair<boost::filesystem::path, PC> pose;
 
 using namespace boost::filesystem;
@@ -65,7 +68,7 @@ class register_poses
     
     std::vector<pose> original_poses;
     std::vector<pose> registered_poses;
-    std::vector<PCN> smoothed_poses;
+//    std::vector<PCN> smoothed_poses;
 
     PC::Ptr concatenated_original;
     PC::Ptr concatenated_registered;
@@ -73,6 +76,8 @@ class register_poses
     //PC::Ptr concatenated_registered_lum;
     
     pcl::PolygonMesh mesh;
+
+    pcl::Poisson<PNT> surface;
 
     pcl::IterativeClosestPoint<PT,PT> icp;
     //pcl::registration::LUM<PT> lum;
@@ -450,96 +455,112 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
     return false;
   }
   ROS_WARN("[Registration_Node] Starting Surface Reconstruction procedure, PLEASE NOTE IT COULD TAKE A LONG TIME...");
-  pcl::NormalEstimationOMP<pcl::PointXYZ,pcl::Normal> ne;
-  pcl::search::KdTree<pcl::PointXYZ>::Ptr tree_o (new pcl::search::KdTree<pcl::PointXYZ>);
-  int i(0);
-  smoothed_poses.clear();
+  
+  PP::Ptr temp (new PP);
+  PP::Ptr comp (new PP);
+  pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
+  
+  pcl::NormalEstimationOMP<P,pcl::Normal> ne;
+  pcl::VoxelGrid<P> vg;
+  pcl::MovingLeastSquares<P, P> mls;
+  pcl::RadiusOutlierRemoval<P> radout;
+  pcl::search::KdTree<P>::Ptr tree (new pcl::search::KdTree<P>);
+  pcl::search::KdTree<PNT>::Ptr tree_n (new pcl::search::KdTree<PNT>);
+  
   concatenated_smoothed->clear();
-  for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
+  //visualization
+  pcl::visualization::PointCloudColorHandlerCustom<P> smoothed_color (comp, 0,100,250);
+  viewer.addPointCloud<P>(comp, smoothed_color, "complete");
+  viewer.addText("Composed model so far in blue", 50,50, 18, 0,0,1, "text");
+  viewer.resetCamera();
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Concatenating complete model... ";
+  for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it)
   {
-    //dropping color and adding normals
-    std::cout<<"\r"<<std::flush;
-    std::cout<<"Computing normals of "<<it->first.c_str()<<" \t["<<i+1<<"/"<<registered_poses.size()<<"]";
-    pcl::PointCloud<pcl::PointXYZ>::Ptr obj (new pcl::PointCloud<pcl::PointXYZ>);
-    pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
-    PCN::Ptr obj_with_normals (new PCN); 
-    pcl::copyPointCloud(it->second, *obj);
-    ne.setSearchMethod(tree_o);
-    ne.setRadiusSearch(0.008);
-    ne.setNumberOfThreads(0);
-    ne.setInputCloud(obj);
-    ne.useSensorOriginAsViewPoint();
-    ne.compute(*normals);
-    pcl::concatenateFields (*obj, *normals, *obj_with_normals);
-    smoothed_poses.push_back(*obj_with_normals);
+    //dropping color information TODO find a way to keep it
+    pcl::copyPointCloud(it->second, *temp);
+    *comp += *temp;
+    viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+    viewer.spinOnce(500);
   }
-  std::cout<<std::endl;
-  
-  PCN::Ptr temp (new PCN);
-  pcl::search::KdTree<PNT>::Ptr tree (new pcl::search::KdTree<PNT>);
-  pcl::VoxelGrid<PNT> vg;
-  pcl::MovingLeastSquares<PNT, PNT> mls;
-  pcl::RadiusOutlierRemoval<PNT> radout;
-  
-  PC::Ptr reg (new PC);
-  pcl::PointCloud<pcl::PointXYZ>::Ptr smoo (new pcl::PointCloud<pcl::PointXYZ>);
-  pcl::PointCloud<pcl::Normal>::Ptr smoo_n (new pcl::PointCloud<pcl::Normal>);
-  pcl::visualization::PointCloudColorHandlerCustom<PT> registered_color (reg, 0,255,0);
-  viewer.addPointCloud(reg, registered_color, "registered");
-  viewer.addPointCloud(smoo, "smoothed");
-  viewer.addText("Registered Pose in green", 50,20, 18, 0,1,0, "text1");
-  viewer.addText("Smoothed Pose with normals", 50,50, 18, 0,0,1, "text2");
-
-  for (int i=0; i<smoothed_poses.size(); ++i)
-  {
-    std::cout<<"\r"<<std::flush;
-    viewer.removePointCloud("smoothed");
-    std::cout<<"Smoothing: pre-downsample, MLS and filtering \t["<<i+1<<"/"<<smoothed_poses.size()<<"]"<<std::flush;
-    vg.setLeafSize(0.001, 0.001, 0.001);
-    vg.setInputCloud(smoothed_poses[i].makeShared());
-    vg.setDownsampleAllData(true);
-    vg.filter(*temp);
-    pcl::copyPointCloud(*temp, smoothed_poses[i]);
+  std::cout<<"\tDone"<<std::endl;
     
-    mls.setInputCloud(smoothed_poses[i].makeShared());
-    mls.setSearchMethod (tree);
-    mls.setUpsamplingMethod (pcl::MovingLeastSquares<PNT, PNT>::NONE);
-    mls.setComputeNormals (false);
-    mls.setPolynomialOrder (2);
-    mls.setPolynomialFit (true);
-    mls.setSearchRadius (0.01);
-    mls.setSqrGaussParam (0.0001); //radius^2
-    mls.process (*temp);
-    pcl::copyPointCloud(*temp, smoothed_poses[i]);
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Filtering model of outliers... ";
+  radout.setInputCloud(comp);
+  radout.setRadiusSearch(0.01);
+  radout.setMinNeighborsInRadius(100);
+  radout.filter(*temp);
+  pcl::copyPointCloud(*temp, *comp);
+  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
     
-    radout.setInputCloud(smoothed_poses[i].makeShared());
-    radout.setRadiusSearch(0.006);
-    radout.setMinNeighborsInRadius(20);
-    radout.filter(*temp);
-    pcl::copyPointCloud(*temp, smoothed_poses[i]);
-    pcl::copyPointCloud(*temp, *smoo);
-    pcl::copyPointCloud(*temp, *smoo_n);
-    pcl::copyPointCloud(registered_poses[i].second, *reg);
-    viewer.updatePointCloud(reg, "registered");
-    viewer.addPointCloud(smoo, "smoothed");
-    viewer.spinOnce(100);
-    *concatenated_smoothed += smoothed_poses[i];
-  }
-  viewer.removePointCloud("registered");
-  viewer.removePointCloud("smoothed");
-  viewer.removeShape("text1");
-  viewer.removeShape("text2");
-  viewer.spinOnce(100);
-  std::cout<<std::endl;
+  
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Applying smoothing through Moving Least Squares... ";
+  mls.setInputCloud(comp);
+  mls.setSearchMethod (tree);
+  mls.setUpsamplingMethod (pcl::MovingLeastSquares<P, P>::NONE);
+  mls.setComputeNormals (false);
+  mls.setPolynomialOrder (2);
+  mls.setPolynomialFit (true);
+  mls.setSearchRadius (0.04);
+  mls.setSqrGaussParam (0.0016); //radius^2
+  mls.process (*temp);
+  pcl::copyPointCloud(*temp, *comp);
+  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
+  
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Downsampling model with Voxel Grid... ";
   vg.setLeafSize(0.0015, 0.0015, 0.0015);
-  vg.setInputCloud(concatenated_smoothed);
+  vg.setInputCloud(comp);
   vg.filter(*temp);
-  pcl::copyPointCloud(*temp, *concatenated_smoothed);
+  pcl::copyPointCloud(*temp, *comp);
+  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
+  
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Computing Normals of model... ";
+    
+  ne.setSearchMethod(tree);
+  ne.setRadiusSearch(0.02);
+  ne.setNumberOfThreads(0);
+  ne.setInputCloud(comp);
+  //ne.useSensorOriginAsViewPoint();
+  ne.compute(*normals);
+  pcl::concatenateFields (*comp, *normals, *concatenated_smoothed);
+  viewer.removePointCloud("complete");
+  viewer.addPointCloudNormals<PNT>(concatenated_smoothed, 1, 0.005, "smoothed");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone"<<std::endl;
+  
+  std::cout<<"Starting Poisson Surface Reconstruction..."<<std::flush;
+  surface.setInputCloud(concatenated_smoothed);
+  surface.setSearchMethod(tree_n);
+  surface.setDepth(10);
+  surface.setSamplesPerNode(3);
+  surface.setOutputPolygons(true);
+  std::cout<<std::endl<<"getDepth: "<<surface.getDepth()<<std::endl;
+  std::cout<<std::endl<<"getMinDepth: "<<surface.getMinDepth()<<std::endl;
+  std::cout<<std::endl<<"getPointWeight: "<<surface.getPointWeight()<<std::endl;
+  std::cout<<std::endl<<"getScale: "<<surface.getScale()<<std::endl;
+  std::cout<<std::endl<<"getSolverDivide: "<<surface.getSolverDivide()<<std::endl;
+  std::cout<<std::endl<<"getIsoDivide: "<<surface.getIsoDivide()<<std::endl;
+  std::cout<<std::endl<<"getSamplesPerNode: "<<surface.getSamplesPerNode()<<std::endl;
+  std::cout<<std::endl<<"getConfidence: "<<surface.getConfidence()<<std::endl;
+  std::cout<<std::endl<<"getOutputPolygons: "<<surface.getOutputPolygons()<<std::endl;
+  std::cout<<std::endl<<"getDegree: "<<surface.getDegree()<<std::endl;
+  std::cout<<std::endl<<"getManifold: "<<surface.getManifold()<<std::endl;
+  surface.reconstruct(mesh);
+  /*
   //GreedyProjectionTriangulation
   pcl::GreedyProjectionTriangulation<PNT> gpt; 
-  std::cout<<"Greedy Projection Triangulation..."<<std::flush;
-  gpt.setSearchRadius(0.015);
-  gpt.setMu(2.5);
+  gpt.setSearchRadius(0.035);
+  gpt.setMu(3.5);
   gpt.setMaximumNearestNeighbors (200);
   gpt.setMaximumSurfaceAngle(M_PI/3); 
   gpt.setMinimumAngle(M_PI/18); //5 deg
@@ -549,12 +570,15 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   gpt.setInputCloud(concatenated_smoothed);
   gpt.setSearchMethod(tree);
   gpt.reconstruct(mesh);
-  
+  */
+  viewer.removePointCloud("smoothed");
+  viewer.spinOnce(100);
   smoothed=true;
   pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh.ply", mesh);//TODO remove and include in save service
   std::cout<<"\tDone"<<std::endl;
   ROS_INFO("[Registration_Node] Surface reconstruction complete!");
   res.success = true;
+  return true;
 }
 
 int main (int argc, char *argv[])
