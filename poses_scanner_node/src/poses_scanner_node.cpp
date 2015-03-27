@@ -1065,12 +1065,13 @@ int main(int argc, char **argv)
     _viewer_->registerKeyboardCallback ( keyboardEvent, (void*)&_viewer_);
     _viewer_->addText("DO NOT CLOSE THE VIEWER!!\nNODE WILL NOT FUNCTION PROPERLY WITHOUT THE VIEWER", 200,200,18,250,150,150,"text");
     _viewer_->spinOnce(300);
-    ros::AsyncSpinner spinner(0); //auto thread allocation
+   // ros::AsyncSpinner spinner(0); //auto thread allocation
     ROS_INFO("[posesScanner] Started Poses Scanner Node\n");
     while (node.nh.ok())
     {
-      spinner.start(); 
+     ros::spinOnce();
+     // spinner.start(); 
     }
-    spinner.stop();
+    //spinner.stop();
     return 0;
 }
