@@ -28,10 +28,15 @@
 #include <pcl/visualization/pcl_visualizer.h>
 #include <pcl/filters/radius_outlier_removal.h>
 #include <pcl/surface/poisson.h>
+#include <pcl/surface/gp3.h>
+#include <pcl/surface/grid_projection.h>
+#include <pcl/surface/marching_cubes_hoppe.h>
 #include <pcl/features/normal_3d_omp.h>
 #include <pcl/surface/mls.h>
 #include <pcl/surface/impl/mls.hpp>
 #include <pcl/visualization/impl/pcl_visualizer.hpp>
+#include <pcl/surface/vtk_smoothing/vtk_mesh_smoothing_laplacian.h>
+#include <pcl/keypoints/uniform_sampling.h>
 
 //general utilities
 #include <cmath>
@@ -72,10 +77,13 @@ class register_poses
 
     PC::Ptr concatenated_original;
     PC::Ptr concatenated_registered;
-    PCN::Ptr concatenated_smoothed;
+    PC::Ptr concatenated_smoothed;
     //PC::Ptr concatenated_registered_lum;
     
-    pcl::PolygonMesh mesh;
+    pcl::PolygonMesh::Ptr mesh_p;
+    pcl::PolygonMesh::Ptr mesh_gpt;
+    pcl::PolygonMesh::Ptr mesh_gp;
+    pcl::PolygonMesh::Ptr mesh_mc;
 
     pcl::Poisson<PNT> surface;
 
@@ -89,11 +97,15 @@ class register_poses
 
 register_poses::register_poses()
 {
-  PC a,b;
-  PCN c;
+  PC a,b,c;
   concatenated_original= a.makeShared();
   concatenated_registered = b.makeShared();
   concatenated_smoothed = c.makeShared();
+  pcl::PolygonMesh d,e,f,g;
+  mesh_p = boost::make_shared<pcl::PolygonMesh>(d);
+  mesh_gpt = boost::make_shared<pcl::PolygonMesh>(e);
+  mesh_gp = boost::make_shared<pcl::PolygonMesh>(f);
+  mesh_mc = boost::make_shared<pcl::PolygonMesh>(g);
   //concatenated_registered_lum = c.makeShared();
   nh = ros::NodeHandle("registration_node");
   srv_set = nh.advertiseService("set_poses", &register_poses::setPoses, this);
@@ -265,145 +277,290 @@ bool register_poses::execute(registration_node::execute::Request& req, registrat
     ROS_ERROR("[Registration_Node] No poses initialized for registration, call service `set_poses` first!!");
     return false;
   }
+  bool cumulative = req.cumulative;
   ROS_WARN("[Registration_Node] Starting Registration procedure, PLEASE NOTE THAT IT COULD TAKE A LONG TIME...");
   concatenated_registered->clear();
-//  concatenated_registered_lum->clear();
-//  lum.compute(); //perform registration
-//  *concatenated_registered_lum = *lum.getConcatenatedCloud();
-//  for (int n=0; n<lum.getNumVertices(); ++n)
-//  {
-//    pose tmp;
-//    tmp.first = original_poses[n].first;
-//    tmp.second = *lum.getTransformedCloud(n);
-//    //TODO adjust transformation stored in sensor origin
-//    registered_poses_lum.push_back(tmp);
-//  }
+  registered_poses.clear();
+  //  concatenated_registered_lum->clear();
+  //  lum.compute(); //perform registration
+  //  *concatenated_registered_lum = *lum.getConcatenatedCloud();
+  //  for (int n=0; n<lum.getNumVertices(); ++n)
+  //  {
+  //    pose tmp;
+  //    tmp.first = original_poses[n].first;
+  //    tmp.second = *lum.getTransformedCloud(n);
+  //    //TODO adjust transformation stored in sensor origin
+  //    registered_poses_lum.push_back(tmp);
+  //  }
+
   //ICP
-  icp.setTransformationEpsilon(1e-6);
-  icp.setEuclideanFitnessEpsilon(1e-5);
-  icp.setMaximumIterations(1000);
+  icp.setTransformationEpsilon(1e-8);
+  icp.setEuclideanFitnessEpsilon(1e-8);
+  icp.setMaximumIterations(2500);
   icp.setUseReciprocalCorrespondences(true);
-  icp.setInputTarget(original_poses[0].second.makeShared());
   registered_poses.push_back(original_poses[0]);
   PC::Ptr orig (original_poses[0].second.makeShared());
   PC::Ptr regis (registered_poses[0].second.makeShared());
+  PC::Ptr target (registered_poses[0].second.makeShared());
+  icp.setInputTarget(target);
   pcl::visualization::PointCloudColorHandlerCustom<PT> original_color (orig, 255,0,0);
+  pcl::visualization::PointCloudColorHandlerCustom<PT> target_color (target, 0,0,255);
   pcl::visualization::PointCloudColorHandlerCustom<PT> registered_color (regis, 0,255,0);
   viewer.addPointCloud(orig, original_color, "original");
+  viewer.addPointCloud(target, target_color, "target");
   viewer.addPointCloud(regis, registered_color, "registered");
   viewer.addText("Original Pose in red", 50,20, 18, 1,0,0, "text1");
   viewer.addText("Registered Pose in green", 50,50, 18, 0,1,0, "text2");
-  viewer.addText(original_poses[0].first.stem().c_str(), 30,80, 18, 0,0.4,0.9, "text3");
+  viewer.addText("Target Pose for current step in blue", 50,80, 18, 0,0,1, "text3");
+  viewer.addText(original_poses[0].first.stem().c_str(), 30,110, 18, 1,1,1, "text4");
   int i=1;
-  for (std::vector<pose>::iterator it(original_poses.begin()+1); it!=original_poses.end(); ++it,++i)
+  if (!cumulative)
   {
-    std::cout<<"\r"<<std::flush;
+    for (std::vector<pose>::iterator it(original_poses.begin()+1); it!=original_poses.end(); ++it,++i)
+    {
+      std::cout<<"\r"<<std::flush;
+      viewer.spinOnce(100);
+      if (i >= i_30 )
+      {
+        pose reg;
+        reg.first = it->first;
+        pcl::copyPointCloud(it->second, reg.second);
+        reg.second.sensor_origin_ = it->second.sensor_origin_;
+        reg.second.sensor_orientation_ = it->second.sensor_orientation_;
+        registered_poses.push_back(reg);
+        continue;
+        // pcl::copyPointCloud(registered_poses[0].second, *target);
+        // icp.setInputTarget(target);
+      }
+      else if (i>1)
+      {
+        pcl::copyPointCloud(registered_poses[i-1].second, *target);
+        icp.setInputTarget(target);
+      }
+      icp.setInputSource(it->second.makeShared());
+      pose reg;
+      reg.first = it->first;
+      std::cout<<"Registering (First Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<original_poses.size()<<"]";
+      icp.align(reg.second);
+      //save new transformation in cloud sensor origin/orientation
+      Eigen::Vector4f t_kli; 
+      t_kli = it->second.sensor_origin_;
+      Eigen::Matrix3f R_kli; 
+      R_kli = it->second.sensor_orientation_;
+      Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
+      T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
+            R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
+            R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
+            0,      0,      0,      1;
+      T_rli = icp.getFinalTransformation();
+      T_lir = T_rli.inverse();
+      T_kr = T_kli * T_lir;
+      Eigen::Matrix3f R_kr;
+      R_kr = T_kr.topLeftCorner(3,3);
+      Eigen::Quaternionf Q_kr (R_kr);
+      Q_kr.normalize();
+      Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
+      reg.second.sensor_origin_ = t_kr;
+      reg.second.sensor_orientation_ = Q_kr;
+      registered_poses.push_back(reg);
+      pcl::copyPointCloud(it->second, *orig);
+      pcl::copyPointCloud(reg.second, *regis);
+      viewer.updatePointCloud(orig, original_color, "original");
+      viewer.updatePointCloud(regis, registered_color, "registered");
+      viewer.updatePointCloud(target, target_color, "target");
+      viewer.updateText(it->first.stem().c_str(), 30,110,18,1,1,1, "text4");
+      viewer.spinOnce(100);
+    }
+    i=0;
+    std::cout<<std::endl;
+    for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
+    {
+      std::cout<<"\r"<<std::flush;
+      std::cout<<"Registering (Second Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<registered_poses.size()<<"]";    
+      viewer.spinOnce(100);
+      if (i < i_30)
+      {
+        *concatenated_registered += it->second;
+        continue;
+      }
+      else if (i >= i_30 && i < i_70)
+      {
+        pcl::copyPointCloud(registered_poses[i-i_30].second, *target);
+        icp.setInputTarget(target);
+      }
+      else if (i>= i_70 && i<registered_poses.size())
+      {
+        pcl::copyPointCloud(registered_poses[i-i_70].second, *target);
+        icp.setInputTarget(target);
+      }
+      pcl::copyPointCloud(it->second, *orig);
+      icp.setInputSource(orig);
+      icp.align(*regis);
+      Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
+      Eigen::Vector4f t_kli; 
+      Eigen::Matrix3f R_kli, R_kr; 
+      T_rli = icp.getFinalTransformation();
+      //save new transformation in cloud sensor origin/orientation
+      t_kli = it->second.sensor_origin_;
+      R_kli = it->second.sensor_orientation_;
+      T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
+            R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
+            R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
+            0,      0,      0,      1;
+      T_lir = T_rli.inverse();
+      T_kr = T_kli * T_lir;
+      R_kr = T_kr.topLeftCorner(3,3);
+      Eigen::Quaternionf Q_kr (R_kr);
+      Q_kr.normalize();
+      Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
+      regis->sensor_origin_ = t_kr;
+      regis->sensor_orientation_ = Q_kr;
+      pcl::copyPointCloud(*regis, it->second);
+      *concatenated_registered += it->second;
+
+      viewer.updatePointCloud(orig, original_color, "original");
+      viewer.updatePointCloud(regis, registered_color, "registered");
+      viewer.updatePointCloud(target, target_color, "target");
+      viewer.updateText(it->first.stem().c_str(), 30,110,18,1,1,1, "text4");
+      viewer.spinOnce(300);
+    }
+    viewer.removePointCloud("original");
+    viewer.removePointCloud("registered");
+    viewer.removePointCloud("target");
+    viewer.removeShape("text1");
+    viewer.removeShape("text2");
+    viewer.removeShape("text3");
+    viewer.removeShape("text4");
+
     viewer.spinOnce(100);
-    if (i == i_30 || i == i_70)
-    {
-      icp.setInputTarget(registered_poses[0].second.makeShared());
-    }
-    else if (i>1)
-    {
-      icp.setInputTarget(registered_poses[i-1].second.makeShared());
-    }
-    icp.setInputSource(it->second.makeShared());
-    pose reg;
-    reg.first = it->first;
-    std::cout<<"Registering (First Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<original_poses.size()<<"]";
-    icp.align(reg.second);
-    //save new transformation in cloud sensor origin/orientation
-    Eigen::Vector4f t_kli; 
-    t_kli = it->second.sensor_origin_;
-    Eigen::Matrix3f R_kli; 
-    R_kli = it->second.sensor_orientation_;
-    Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
-    T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
-             R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
-             R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
-             0,      0,      0,      1;
-    T_rli = icp.getFinalTransformation();
-    T_lir = T_rli.inverse();
-    T_kr = T_kli * T_lir;
-    Eigen::Matrix3f R_kr;
-    R_kr = T_kr.topLeftCorner(3,3);
-    Eigen::Quaternionf Q_kr (R_kr);
-    Q_kr.normalize();
-    Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
-    reg.second.sensor_origin_ = t_kr;
-    reg.second.sensor_orientation_ = Q_kr;
-    registered_poses.push_back(reg);
-    pcl::copyPointCloud(it->second, *orig);
-    pcl::copyPointCloud(reg.second, *regis);
-    viewer.updatePointCloud(orig, original_color, "original");
-    viewer.updatePointCloud(regis, registered_color, "registered");
-    viewer.updateText(it->first.stem().c_str(), 30,80,18,0,0.4,0.9, "text3");
+    std::cout<<std::endl;
+    //  vg.setInputCloud(concatenated_registered_lum);
+    //  vg.filter(tmp);
+    //  pcl::copyPointCloud(tmp, *concatenated_registered_lum);
+    //  pcl::io::savePCDFile ( (home + "/original.pcd").c_str(), *concatenated_original );
+    //  pcl::io::savePCDFile ( (home + "/icp.pcd").c_str(), *concatenated_registered );
+    //  pcl::io::savePCDFile ( (home + "/lum.pcd").c_str(), *concatenated_registered_lum );
   }
-  i=0;
-  std::cout<<std::endl;
-  for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
+  else if (cumulative)
   {
-    std::cout<<"\r"<<std::flush;
-    std::cout<<"Registering (Second Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<original_poses.size()<<"]";    
+    icp.setUseReciprocalCorrespondences(false);
+    for (std::vector<pose>::iterator it(original_poses.begin()+1); it!=original_poses.end(); ++it,++i)
+    {
+      std::cout<<"\r"<<std::flush;
+      viewer.spinOnce(100);
+      if (i >= i_30 )
+      {
+        pose reg;
+        reg.first = it->first;
+        pcl::copyPointCloud(it->second, reg.second);
+        reg.second.sensor_origin_ = it->second.sensor_origin_;
+        reg.second.sensor_orientation_ = it->second.sensor_orientation_;
+        registered_poses.push_back(reg);
+        continue;
+        // pcl::copyPointCloud(registered_poses[0].second, *target);
+        // icp.setInputTarget(target);
+      }
+      else if (i>1)
+      {
+        *target += registered_poses[i-1].second;
+        icp.setInputTarget(target);
+      }
+      icp.setInputSource(it->second.makeShared());
+      pose reg;
+      reg.first = it->first;
+      std::cout<<"Registering (First Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<original_poses.size()<<"]";
+      icp.align(reg.second);
+      //save new transformation in cloud sensor origin/orientation
+      Eigen::Vector4f t_kli; 
+      t_kli = it->second.sensor_origin_;
+      Eigen::Matrix3f R_kli; 
+      R_kli = it->second.sensor_orientation_;
+      Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
+      T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
+            R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
+            R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
+            0,      0,      0,      1;
+      T_rli = icp.getFinalTransformation();
+      T_lir = T_rli.inverse();
+      T_kr = T_kli * T_lir;
+      Eigen::Matrix3f R_kr;
+      R_kr = T_kr.topLeftCorner(3,3);
+      Eigen::Quaternionf Q_kr (R_kr);
+      Q_kr.normalize();
+      Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
+      reg.second.sensor_origin_ = t_kr;
+      reg.second.sensor_orientation_ = Q_kr;
+      registered_poses.push_back(reg);
+      pcl::copyPointCloud(it->second, *orig);
+      pcl::copyPointCloud(reg.second, *regis);
+      viewer.updatePointCloud(orig, original_color, "original");
+      viewer.updatePointCloud(regis, registered_color, "registered");
+      viewer.updatePointCloud(target, target_color, "target");
+      viewer.updateText(it->first.stem().c_str(), 30,110,18,1,1,1, "text4");
+      viewer.spinOnce(100);
+    }
+    i=0;
+    std::cout<<std::endl;
+    for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it,++i)
+    {
+      std::cout<<"\r"<<std::flush;
+      std::cout<<"Registering (Second Passage) "<<it->first.c_str()<<" \t ["<<i+1<<"/"<<registered_poses.size()<<"]";    
+      viewer.spinOnce(100);
+      if (i < i_30)
+      {
+        *concatenated_registered += it->second;
+        continue;
+      }
+      *target += registered_poses[i-1].second;
+      icp.setInputTarget(target);
+      pcl::copyPointCloud(it->second, *orig);
+      icp.setInputSource(orig);
+      icp.align(*regis);
+      Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
+      Eigen::Vector4f t_kli; 
+      Eigen::Matrix3f R_kli, R_kr; 
+      T_rli = icp.getFinalTransformation();
+      //save new transformation in cloud sensor origin/orientation
+      t_kli = it->second.sensor_origin_;
+      R_kli = it->second.sensor_orientation_;
+      T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
+            R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
+            R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
+            0,      0,      0,      1;
+      T_lir = T_rli.inverse();
+      T_kr = T_kli * T_lir;
+      R_kr = T_kr.topLeftCorner(3,3);
+      Eigen::Quaternionf Q_kr (R_kr);
+      Q_kr.normalize();
+      Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
+      regis->sensor_origin_ = t_kr;
+      regis->sensor_orientation_ = Q_kr;
+      pcl::copyPointCloud(*regis, it->second);
+      *concatenated_registered += it->second;
+
+      viewer.updatePointCloud(orig, original_color, "original");
+      viewer.updatePointCloud(regis, registered_color, "registered");
+      viewer.updatePointCloud(target, target_color, "target");
+      viewer.updateText(it->first.stem().c_str(), 30,110,18,1,1,1, "text4");
+      viewer.spinOnce(300);
+    }
+    viewer.removePointCloud("original");
+    viewer.removePointCloud("registered");
+    viewer.removePointCloud("target");
+    viewer.removeShape("text1");
+    viewer.removeShape("text2");
+    viewer.removeShape("text3");
+    viewer.removeShape("text4");
+
     viewer.spinOnce(100);
-    if (i < i_30)
-      continue;
-
-    if (i < i_70)
-    {
-      icp.setInputTarget(registered_poses[i - i_30].second.makeShared());
-      pcl::copyPointCloud(registered_poses[i - i_30].second, *orig);
-    }
-    else if (i>= i_70 && i<original_poses.size())
-    {
-      icp.setInputTarget(registered_poses[i - i_70].second.makeShared());
-      pcl::copyPointCloud(registered_poses[i - i_70].second, *orig);
-    }
-    icp.setInputSource(it->second.makeShared());
-    PC::Ptr aligned (new PC);
-    icp.align(*aligned);
-    //save new transformation in cloud sensor origin/orientation
-    Eigen::Vector4f t_kli; 
-    t_kli = it->second.sensor_origin_;
-    Eigen::Matrix3f R_kli; 
-    R_kli = it->second.sensor_orientation_;
-    Eigen::Matrix4f T_kli, T_rli, T_lir, T_kr;
-    T_kli << R_kli(0,0), R_kli(0,1), R_kli(0,2), t_kli(0),
-             R_kli(1,0), R_kli(1,1), R_kli(1,2), t_kli(1),
-             R_kli(2,0), R_kli(2,1), R_kli(2,2), t_kli(2),
-             0,      0,      0,      1;
-    T_rli = icp.getFinalTransformation();
-    T_lir = T_rli.inverse();
-    T_kr = T_kli * T_lir;
-    Eigen::Matrix3f R_kr;
-    R_kr = T_kr.topLeftCorner(3,3);
-    Eigen::Quaternionf Q_kr (R_kr);
-    Q_kr.normalize();
-    Eigen::Vector4f t_kr(T_kr(0,3), T_kr(1,3), T_kr(2,3), 1);
-    aligned->sensor_origin_ = t_kr;
-    aligned->sensor_orientation_ = Q_kr;
-    pcl::copyPointCloud(*aligned, registered_poses[i].second);
-    *concatenated_registered += *aligned;
-    pcl::copyPointCloud(*aligned, *regis);
-    viewer.updatePointCloud(orig, original_color, "original");
-    viewer.updatePointCloud(regis, registered_color, "registered");
-    viewer.updateText(it->first.stem().c_str(), 30,80,18,0,0.4,0.9, "text3");
+    std::cout<<std::endl;
+    //  vg.setInputCloud(concatenated_registered_lum);
+    //  vg.filter(tmp);
+    //  pcl::copyPointCloud(tmp, *concatenated_registered_lum);
+    //  pcl::io::savePCDFile ( (home + "/original.pcd").c_str(), *concatenated_original );
+    //  pcl::io::savePCDFile ( (home + "/icp.pcd").c_str(), *concatenated_registered );
+    //  pcl::io::savePCDFile ( (home + "/lum.pcd").c_str(), *concatenated_registered_lum );
   }
-  viewer.removePointCloud("original");
-  viewer.removePointCloud("registered");
-  viewer.removeShape("text1");
-  viewer.removeShape("text2");
-
-  viewer.removeShape("text3");
-  viewer.spinOnce(100);
-  std::cout<<std::endl;
-  i=0;
-//  vg.setInputCloud(concatenated_registered_lum);
-//  vg.filter(tmp);
-//  pcl::copyPointCloud(tmp, *concatenated_registered_lum);
-//  pcl::io::savePCDFile ( (home + "/original.pcd").c_str(), *concatenated_original );
-//  pcl::io::savePCDFile ( (home + "/icp.pcd").c_str(), *concatenated_registered );
-//  pcl::io::savePCDFile ( (home + "/lum.pcd").c_str(), *concatenated_registered_lum );
   ROS_INFO("[Registration_Node] Registration complete!");
   res.success = true;
   registered = true;
@@ -457,56 +614,69 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   }
   ROS_WARN("[Registration_Node] Starting Surface Reconstruction procedure, PLEASE NOTE IT COULD TAKE A LONG TIME...");
   
-  PP::Ptr temp (new PP);
-  PP::Ptr comp (new PP);
-  pcl::PointCloud<pcl::Normal>::Ptr normals (new pcl::PointCloud<pcl::Normal>);
-  
-  pcl::NormalEstimationOMP<P,pcl::Normal> ne;
-  pcl::VoxelGrid<P> vg;
-  pcl::MovingLeastSquares<P, P> mls;
-  pcl::RadiusOutlierRemoval<P> radout;
-  pcl::search::KdTree<P>::Ptr tree (new pcl::search::KdTree<P>);
-  pcl::search::KdTree<PNT>::Ptr tree_n (new pcl::search::KdTree<PNT>);
+  PC::Ptr temp (new PC);
+ // pcl::NormalEstimationOMP<P,pcl::Normal> ne;
+  pcl::VoxelGrid<PT> vg;
+ // pcl::MovingLeastSquares<P, P> mls;
+  pcl::RadiusOutlierRemoval<PT> radout;
+  pcl::search::KdTree<PT>::Ptr tree (new pcl::search::KdTree<PT>);
+  //pcl::search::KdTree<PNT>::Ptr tree_n (new pcl::search::KdTree<PNT>);
   
   concatenated_smoothed->clear();
   //visualization
-  pcl::visualization::PointCloudColorHandlerCustom<P> smoothed_color (comp, 0,100,250);
-  viewer.addPointCloud<P>(comp, smoothed_color, "complete");
-  viewer.addText("Composed model so far in blue", 50,50, 18, 0,0,1, "text");
+  //pcl::visualization::PointCloudColorHandlerCustom<P> smoothed_color (comp, 0,100,250);
+  viewer.addPointCloud<PT>(concatenated_smoothed, "complete");
+  viewer.addText("Composed model step by step...", 50,50, 18, 0,0,1, "text");
   viewer.resetCamera();
   std::cout<<"\r"<<std::flush;
   std::cout<<"Concatenating complete model... "<<std::flush;
   for (std::vector<pose>::iterator it(registered_poses.begin()); it!=registered_poses.end(); ++it)
   {
-    //dropping color information TODO find a way to keep it
     pcl::copyPointCloud(it->second, *temp);
-    *comp += *temp;
-    viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
-    viewer.spinOnce(500);
+    *concatenated_smoothed += *temp;
+    viewer.updatePointCloud(concatenated_smoothed, "complete");
+    viewer.spinOnce(100);
   }
-  std::cout<<"\tDone"<<std::endl;
-    
+  std::cout<<"\tDone. Total of "<<concatenated_smoothed->points.size()<<" points"<<std::endl;
+
   std::cout<<"\r"<<std::flush;
   std::cout<<"Filtering model of outliers... "<<std::flush;
-  radout.setInputCloud(comp);
+  radout.setInputCloud(concatenated_smoothed);
   radout.setRadiusSearch(0.01);
-  radout.setMinNeighborsInRadius(1000);
+  radout.setMinNeighborsInRadius(1200);
   radout.filter(*temp);
-  pcl::copyPointCloud(*temp, *comp);
-  viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
+  pcl::copyPointCloud(*temp, *concatenated_smoothed);
+  viewer.updatePointCloud<PT>(concatenated_smoothed, "complete");
   viewer.spinOnce(500);
-  std::cout<<"\tDone"<<std::endl;
-    
+  std::cout<<"\tDone. Total of "<<concatenated_smoothed->points.size()<<" points"<<std::endl;
+  /*  
   std::cout<<"\r"<<std::flush;
-  std::cout<<"Pre-Downsampling model with Voxel Grid... "<<std::flush;
-  vg.setLeafSize(0.002, 0.002, 0.002);
-  vg.setInputCloud(comp);
-  vg.filter(*temp);
+  std::cout<<"Applying smoothing through Moving Least Squares... "<<std::flush;
+  mls.setInputCloud(comp);
+  mls.setSearchMethod (tree);
+  mls.setUpsamplingMethod (pcl::MovingLeastSquares<P, P>::NONE);
+  mls.setComputeNormals (false);
+  mls.setPolynomialOrder (3);
+  mls.setPolynomialFit (true);
+  mls.setSearchRadius (0.005);
+  mls.setSqrGaussParam (0.000025); //radius^2
+  mls.process (*temp);
   pcl::copyPointCloud(*temp, *comp);
   viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
   viewer.spinOnce(500);
   std::cout<<"\tDone"<<std::endl;
-  
+ */ 
+
+  std::cout<<"\r"<<std::flush;
+  std::cout<<"Downsampling model with Voxel Grid... "<<std::flush;
+  vg.setLeafSize(0.002, 0.002, 0.002);
+  vg.setInputCloud(concatenated_smoothed);
+  vg.filter(*temp);
+  pcl::copyPointCloud(*temp, *concatenated_smoothed);
+  viewer.updatePointCloud<PT>(concatenated_smoothed, "complete");
+  viewer.spinOnce(500);
+  std::cout<<"\tDone. Total of "<<concatenated_smoothed->points.size()<<" points"<<std::endl;
+/*
   std::cout<<"\r"<<std::flush;
   std::cout<<"Applying smoothing through Moving Least Squares... "<<std::flush;
   mls.setInputCloud(comp);
@@ -515,14 +685,15 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   mls.setComputeNormals (false);
   mls.setPolynomialOrder (2);
   mls.setPolynomialFit (true);
-  mls.setSearchRadius (0.03);
-  mls.setSqrGaussParam (0.0009); //radius^2
+  mls.setSearchRadius (7);
+  mls.setSqrGaussParam (49); //radius^2
   mls.process (*temp);
   pcl::copyPointCloud(*temp, *comp);
   viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
   viewer.spinOnce(500);
   std::cout<<"\tDone"<<std::endl;
-  
+  */
+/*  
   std::cout<<"\r"<<std::flush;
   std::cout<<"Final Downsample model with Voxel Grid... "<<std::flush;
   vg.setLeafSize(0.001, 0.001, 0.001);
@@ -532,28 +703,36 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   viewer.updatePointCloud<P>(comp, smoothed_color, "complete");
   viewer.spinOnce(500);
   std::cout<<"\tDone"<<std::endl;
-  
+*/
+  /*
   std::cout<<"\r"<<std::flush;
   std::cout<<"Computing Normals of model... "<<std::flush;
-    
   ne.setSearchMethod(tree);
   ne.setRadiusSearch(0.02);
   ne.setNumberOfThreads(0);
   ne.setInputCloud(comp);
-  //ne.useSensorOriginAsViewPoint();
+  ne.setViewPoint(0,0,20);
   ne.compute(*normals);
+  for(pcl::PointCloud<pcl::Normal>::iterator it(normals->begin()); it != normals->end(); ++it)
+  {
+    it->normal_x *= -1;
+    it->normal_y *= -1;
+    it->normal_z *= -1;
+  }
   pcl::concatenateFields (*comp, *normals, *concatenated_smoothed);
   viewer.removePointCloud("complete");
-  viewer.addPointCloudNormals<PNT>(concatenated_smoothed, 1, 0.005, "smoothed");
+  viewer.addPointCloudNormals<PNT>(concatenated_smoothed, 1, 5, "smoothed");
   viewer.spinOnce(500);
   std::cout<<"\tDone"<<std::endl;
-  
+ 
   std::cout<<"Starting Poisson Surface Reconstruction..."<<std::flush;
   surface.setInputCloud(concatenated_smoothed);
   surface.setSearchMethod(tree_n);
-  surface.setDepth(10);
-  surface.setSamplesPerNode(3);
-  surface.setOutputPolygons(true);
+  surface.setDepth(11);
+  surface.setSolverDivide(9);
+  surface.setSamplesPerNode(15);
+  surface.setOutputPolygons(false);
+  surface.setMinDepth(8);
   std::cout<<std::endl<<"getDepth: "<<surface.getDepth()<<std::endl;
   std::cout<<std::endl<<"getMinDepth: "<<surface.getMinDepth()<<std::endl;
   std::cout<<std::endl<<"getPointWeight: "<<surface.getPointWeight()<<std::endl;
@@ -565,27 +744,60 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   std::cout<<std::endl<<"getOutputPolygons: "<<surface.getOutputPolygons()<<std::endl;
   std::cout<<std::endl<<"getDegree: "<<surface.getDegree()<<std::endl;
   std::cout<<std::endl<<"getManifold: "<<surface.getManifold()<<std::endl;
-  surface.reconstruct(mesh);
-  /*
+  surface.reconstruct(*mesh_p);
+  std::cout<<"\tDone"<<std::endl;
+  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh_p.ply", *mesh_p);//TODO remove and include in save service
+ 
+  
   //GreedyProjectionTriangulation
+  std::cout<<"Starting Greedy Projection Triangulation..."<<std::flush;
   pcl::GreedyProjectionTriangulation<PNT> gpt; 
-  gpt.setSearchRadius(0.035);
-  gpt.setMu(3.5);
-  gpt.setMaximumNearestNeighbors (200);
-  gpt.setMaximumSurfaceAngle(M_PI/3); 
-  gpt.setMinimumAngle(M_PI/18); //5 deg
-  gpt.setMaximumAngle(2*M_PI/3); //120 deg
-  gpt.setNormalConsistency(true);
-
+  gpt.setSearchRadius(10);
+  gpt.setMu(1.5);
+  gpt.setMaximumNearestNeighbors (300);
+  gpt.setMaximumSurfaceAngle(M_PI/4); 
+  gpt.setMinimumAngle(M_PI/18);
+  gpt.setMaximumAngle(2*M_PI/3); 
+  gpt.setNormalConsistency(false);
   gpt.setInputCloud(concatenated_smoothed);
-  gpt.setSearchMethod(tree);
-  gpt.reconstruct(mesh);
+  gpt.setSearchMethod(tree_n);
+  gpt.reconstruct(*mesh_gpt);
+  std::cout<<"\tDone"<<std::endl;
+  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh_gpt.ply", *mesh_gpt);//TODO remove and include in save service
+
+  //GridProjection
+  
+  std::cout<<"Starting Grid Projection..."<<std::flush;
+  pcl::GridProjection<PNT> gp;
+  gp.setInputCloud(concatenated_smoothed);
+  gp.setSearchMethod(tree_n);
+  gp.reconstruct(*mesh_gp);
+  std::cout<<"\tDone"<<std::endl;
+  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh_gp.ply", *mesh_gp);//TODO remove and include in save service
   */
-  viewer.removePointCloud("smoothed");
+/*
+  pcl::MeshSmoothingLaplacianVTK smoother;
+  smoother.setInputMesh(mesh_gpt);
+  smoother.setConvergence(0.001);
+  smoother.setFeatureEdgeSmoothing(1);
+  std::cout<<"Iterations: "<<smoother.getNumIter()<<" Convergence: "<<smoother.getConvergence()<<" Relaxation: "<<smoother.getRelaxationFactor()<<" EdgeSmoothing: "<<smoother.getFeatureEdgeSmoothing()<<" FeatureAngle: "<<smoother.getFeatureAngle()<<" EdgeAngle "<<smoother.getEdgeAngle()<<" BoundarySmoothing "<<smoother.getBoundarySmoothing()<<std::endl;
+  smoother.process(*mesh_gp);
+  */
+ /* 
+  //marchingcubes
+  std::cout<<"Starting Marching Cubes..."<<std::flush;
+  pcl::MarchingCubesHoppe<PNT> mc;
+  mc.setInputCloud(concatenated_smoothed);
+  mc.setSearchMethod(tree_n);
+  mc.reconstruct(*mesh_mc);
+  std::cout<<"\tDone"<<std::endl;
+  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh_mc.ply", *mesh_mc);//TODO remove and include in save service
+*/
+  
+  viewer.removePointCloud("complete");
+  viewer.removeShape("text");
   viewer.spinOnce(100);
   smoothed=true;
-  pcl::io::savePolygonFilePLY ("/home/tabjones/Desktop/mesh.ply", mesh);//TODO remove and include in save service
-  std::cout<<"\tDone"<<std::endl;
   ROS_INFO("[Registration_Node] Surface reconstruction complete!");
   res.success = true;
   return true;
