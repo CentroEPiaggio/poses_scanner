@@ -11,7 +11,7 @@
   <include file="$(find rgbd_lwr)/launch/rgbd_lwr.launch" />
 
   <!-- Launch dynamic reconfigure -->
-  <node name="$(anon dynrconf_poses_scanner)" pkg="rqt_reconfigure" type="rqt_reconfigure" respawn="false"/>
+<!--  <node name="$(anon dynrconf_poses_scanner)" pkg="rqt_reconfigure" type="rqt_reconfigure" respawn="false"/> -->
 	
   <!-- the poses scanner node  -->
   <rosparam command="load" file="$(find poses_scanner_node)/config/parameters.yaml" />
