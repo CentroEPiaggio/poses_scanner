@@ -597,8 +597,8 @@ bool register_poses::save(registration_node::save::Request& req, registration_no
   concatenated_reg /= name_reg;
   concatenated_orig /= name_orig;
   concatenated_smooth /= name_smooth;
-  pcl::io::savePCDFileBinaryCompressed (concatenated_reg.c_str(), *concatenated_registered); 
-  pcl::io::savePCDFileBinaryCompressed (concatenated_orig.c_str(), *concatenated_original); 
+  //pcl::io::savePCDFileBinaryCompressed (concatenated_reg.c_str(), *concatenated_registered); 
+  //pcl::io::savePCDFileBinaryCompressed (concatenated_orig.c_str(), *concatenated_original); 
   if (smoothed)
     pcl::io::savePCDFileBinaryCompressed (concatenated_smooth.c_str(), *concatenated_smoothed); 
   res.success = true;
@@ -627,6 +627,7 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   //pcl::visualization::PointCloudColorHandlerCustom<P> smoothed_color (comp, 0,100,250);
   viewer.addPointCloud<PT>(concatenated_smoothed, "complete");
   viewer.addText("Composed model step by step...", 50,50, 18, 0,0,1, "text");
+  viewer.addText("step", 50,20,20, 0,1,0, "step");
   viewer.resetCamera();
   std::cout<<"\r"<<std::flush;
   std::cout<<"Concatenating complete model... "<<std::flush;
@@ -635,6 +636,7 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
     pcl::copyPointCloud(it->second, *temp);
     *concatenated_smoothed += *temp;
     viewer.updatePointCloud(concatenated_smoothed, "complete");
+    viewer.updateText(it->first.stem().string(), 50,20,20, 0,1,0, "step");
     viewer.spinOnce(100);
   }
   std::cout<<"\tDone. Total of "<<concatenated_smoothed->points.size()<<" points"<<std::endl;
