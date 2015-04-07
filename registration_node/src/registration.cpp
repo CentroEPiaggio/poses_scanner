@@ -1,4 +1,3 @@
-// ROS headers
 #include <ros/ros.h>
 #include <ros/console.h>
 #include <pcl_ros/point_cloud.h>
@@ -642,6 +641,8 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   std::cout<<"\tDone. Total of "<<concatenated_smoothed->points.size()<<" points"<<std::endl;
 
   std::cout<<"\r"<<std::flush;
+  viewer.updateText("Filtering Outliers", 50,20,20, 0,1,0, "step");
+  viewer.spinOnce(100);
   std::cout<<"Filtering model of outliers... "<<std::flush;
   radout.setInputCloud(concatenated_smoothed);
   radout.setRadiusSearch(0.01);
@@ -670,6 +671,8 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
  */ 
 
   std::cout<<"\r"<<std::flush;
+  viewer.updateText("Downsampling", 50,20,20, 0,1,0, "step");
+  viewer.spinOnce(100);
   std::cout<<"Downsampling model with Voxel Grid... "<<std::flush;
   vg.setLeafSize(0.002, 0.002, 0.002);
   vg.setInputCloud(concatenated_smoothed);
@@ -798,6 +801,7 @@ bool register_poses::recon(registration_node::reconstruct::Request& req, registr
   
   viewer.removePointCloud("complete");
   viewer.removeShape("text");
+  viewer.removeShape("step");
   viewer.spinOnce(100);
   smoothed=true;
   ROS_INFO("[Registration_Node] Surface reconstruction complete!");
