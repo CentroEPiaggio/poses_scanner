@@ -4,8 +4,8 @@ project(turn_table_interface)
 ## Find catkin macros and libraries
 ## if COMPONENTS list like find_package(catkin REQUIRED COMPONENTS xyz)
 ## is used, also find other catkin packages
+find_package(catkin REQUIRED COMPONENTS cmake_modules roscpp tf tf_conversions std_srvs sensor_msgs message_generation)
 find_package(Eigen REQUIRED)
-find_package(catkin REQUIRED roscpp tf tf_conversions std_srvs sensor_msgs message_generation)
 
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
