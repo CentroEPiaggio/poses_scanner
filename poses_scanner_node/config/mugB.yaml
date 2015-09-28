@@ -1,6 +1,0 @@
-poses_scanner/zmin_30: -0.004
-poses_scanner/seg_tol_70: 0.006
-poses_scanner/seg_tol_50: 0.006
-poses_scanner/seg_tol_30: 0.006
-poses_scanner/neighbors_70: 30
-poses_scanner/neighbors_50: 20

@@ -1,39 +1,14 @@
-# Poses Scanner Nodes
-A series of nodes to acquire a database of poses for pose estimation procedure
+# Turn Table Interface
+Simple interface to Centro Piaggio turn table
 ## Setup
 ### Software Setup
-You require a working Ros(indigo) repository with the following packages:
- - Poses scanner node (included)
- - Turntable interface node (included)
- - rgbd_lwr (included)
- - openni2 (install with apt or download from [Ros Drivers](https://github.com/ros-drivers))
-    * openni2_launch
-    * openni2_camera
-    * rgbd_launch
- - kuka_lwr (from [CentroPiaggio repositories](https://github.com/CentroEPiaggio/kuka-lwr))
- - [scene_filter](https://bitbucket.org/Tabjones/scene_filter)
-
-Please note that currently poses scanner works only with kuka_lwr at commit 12ea17d13f6b70c1451ea73aa25c6007a81451bf.
-Run the following inside kuka_lwr package
-`git checkout 12ea17d13f6b70c1451ea73aa25c6007a81451bf`
-Execute `catkin_make` inside the repository root to update any changes.
+You require a working Ros(indigo) repository.
 ### Hardware Setup
 - Turntable
 - Power supply of 7.5V to turn on turntable's servo.
-- Asus Xtion Pro Live.
-- Kuka LWR right arm.
-- Poses scanner tool loaded and mounted on right arm.
-`TODO` more info in the near future
 
 ## Usage (WORK IN PROGRESS)
 To launch the poses scanner execute:
-`roslaunch poses_scanner_node poses_scanner_node.launch`
+`roslaunch turn_table_interface turn_table_interface.launch`
 
-At the start of each session make sure you acquired the various table transformations with:
-`rosservice call /poses_scanner_node table`
-You don't need to launch this service again, unless you move the turntable from its position or you move the Asus Xtion from the Kuka arm.
-
-To actually acquire poses of an object use the command:
-`rosservice call /poses_scanner_node acquire 'name: OBJNAME lonpass:LONPASS'`
-
-
+Call Services `setPos` and `getPos` to move the table or read its current position (angles are in degrees).
