@@ -56,8 +56,8 @@ TurnTable::TurnTable()
   commActivate(&cube_comm_, 1, true); //cube_id is 1 for table
   cube_mutex_.unlock();
 
-  srv_table_pos_ = nh_.advertiseService("set_table_pos", &TurnTable::setTablePos, this);
-  srv_read_pos_ = nh_.advertiseService("get_table_pos", &TurnTable::getTablePos, this);
+  srv_table_pos_ = nh_.advertiseService("set_pos", &TurnTable::setTablePos, this);
+  srv_read_pos_ = nh_.advertiseService("get_pos", &TurnTable::getTablePos, this);
 
 }
 
