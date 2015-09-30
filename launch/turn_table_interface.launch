@@ -1,9 +1,8 @@
 <launch>
 	<arg name="port" default="/dev/ttyUSB0"/>
 	<arg name="cube_id" default="1"/>
-	<arg name="name" default="turn_table_interface" />
 
-	<node pkg="turn_table_interface" type="turn_table_interface" name="$(arg name)" output="screen">
+	<node pkg="turn_table_interface" type="turn_table_interface" name="turn_table_interface" output="screen">
 
 		<!-- REMEMBER TO CHECK THE PORT * -> /dev/ttyUSB*!/-->
 		<!-- AND THEN REMEMBER TO sudo chmod 777 /dev/ttyUSB*!/-->

@@ -99,19 +99,19 @@ add_library(qbcubelib
 )
 
 ## Declare a cpp executable
-add_executable(turn_table_interface_node
+add_executable(turn_table_interface
   src/table_interface_node.cpp
 )
 
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
-add_dependencies(turn_table_interface_node
+add_dependencies(turn_table_interface
   turn_table_interface_gencpp
   qbcubelib
 )
 
 ## Specify libraries to link a library or executable target against
-target_link_libraries(turn_table_interface_node
+target_link_libraries(turn_table_interface
    qbcubelib
    ${catkin_LIBRARIES}
 )
